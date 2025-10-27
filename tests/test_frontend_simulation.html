@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Frontend Simulation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .test-section {
+            background: #f5f5f5;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        button {
+            background: #6366f1;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #4f46e5;
+        }
+        button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            background: white;
+            border-left: 4px solid #6366f1;
+        }
+        .loading {
+            color: #6366f1;
+            font-weight: bold;
+        }
+        .success {
+            color: #10b981;
+            font-weight: bold;
+        }
+        .error {
+            color: #ef4444;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>🏀 Frontend Simulation Test</h1>
+    
+    <div class="test-section">
+        <h2>Step 1: Start Trade Analysis</h2>
+        <button id="analyzeBtn" onclick="startAnalysis()">Start Analysis</button>
+        <div id="analyzeResult" class="result" style="display:none;"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Step 2: Run Simulation (with Polling)</h2>
+        <button id="simulateBtn" onclick="runSimulation()" disabled>Run Simulation</button>
+        <div id="simulateResult" class="result" style="display:none;"></div>
+    </div>
+
+    <script>
+        const BASE_URL = 'http://localhost:3002';
+        let currentSessionId = null;
+
+        async function startAnalysis() {
+            const btn = document.getElementById('analyzeBtn');
+            const resultDiv = document.getElementById('analyzeResult');
+            
+            btn.disabled = true;
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<span class="loading">⏳ Starting analysis...</span>';
+            
+            try {
+                const response = await fetch(`${BASE_URL}/api/trade-assistant/analyze`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        league_id: '1265480188934750208',
+                        sleeper_user_id: '730568793184653312',
+                        user_roster_id: 1,
+                        opponent_roster_id: 2,
+                        user_players_out: ['1054', '1434'],
+                        user_players_in: ['1272', '1308']
+                    })
+                });
+                
+                const data = await response.json();
+                currentSessionId = data.session_id;
+                
+                resultDiv.innerHTML = `
+                    <span class="success">✅ Analysis started!</span><br>
+                    Session ID: ${currentSessionId}<br>
+                    <span class="loading">Waiting for completion...</span>
+                `;
+                
+                // Poll for completion
+                await pollForAnalysis();
+                
+            } catch (err) {
+                resultDiv.innerHTML = `<span class="error">❌ Error: ${err.message}</span>`;
+                btn.disabled = false;
+            }
+        }
+
+        async function pollForAnalysis() {
+            const resultDiv = document.getElementById('analyzeResult');
+            const maxAttempts = 15;
+            
+            for (let i = 0; i < maxAttempts; i++) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                const response = await fetch(`${BASE_URL}/api/trade-assistant/analysis/${currentSessionId}`);
+                const data = await response.json();
+                
+                if (data.status === 'completed') {
+                    resultDiv.innerHTML = `
+                        <span class="success">✅ Analysis completed!</span><br>
+                        Session ID: ${currentSessionId}<br>
+                        Score: ${data.favorability_score}/100<br>
+                        Recommendation: ${data.analysis_result?.recommendation || 'N/A'}<br>
+                        <br>
+                        <strong>Ready to run simulation!</strong>
+                    `;
+                    document.getElementById('simulateBtn').disabled = false;
+                    return;
+                } else if (data.status === 'failed') {
+                    resultDiv.innerHTML = `<span class="error">❌ Analysis failed</span>`;
+                    document.getElementById('analyzeBtn').disabled = false;
+                    return;
+                }
+                
+                resultDiv.innerHTML = `
+                    <span class="success">✅ Analysis started!</span><br>
+                    Session ID: ${currentSessionId}<br>
+                    <span class="loading">⏳ Waiting... (attempt ${i + 1}/${maxAttempts})</span>
+                `;
+            }
+        }
+
+        async function runSimulation() {
+            const btn = document.getElementById('simulateBtn');
+            const resultDiv = document.getElementById('simulateResult');
+            
+            btn.disabled = true;
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<span class="loading">⏳ Starting simulation...</span>';
+            
+            try {
+                // Start simulation
+                await fetch(`${BASE_URL}/api/trade-assistant/simulate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        weeks_ahead: 3
+                    })
+                });
+                
+                resultDiv.innerHTML = '<span class="loading">⏳ Simulation running in background, polling for results...</span>';
+                
+                // Poll for simulation results
+                const maxAttempts = 10;
+                for (let i = 0; i < maxAttempts; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    
+                    const response = await fetch(`${BASE_URL}/api/trade-assistant/analysis/${currentSessionId}`);
+                    const data = await response.json();
+                    
+                    if (data.simulation_result) {
+                        const sim = data.simulation_result;
+                        resultDiv.innerHTML = `
+                            <span class="success">✅ Simulation completed!</span><br><br>
+                            <strong>📉 Without Trade:</strong><br>
+                            &nbsp;&nbsp;Points: ${sim.without_trade?.projected_points?.toFixed(1) || 'N/A'}<br>
+                            &nbsp;&nbsp;Win %: ${((sim.without_trade?.win_probability || 0) * 100).toFixed(0)}%<br><br>
+                            <strong>📈 With Trade:</strong><br>
+                            &nbsp;&nbsp;Points: ${sim.with_trade?.projected_points?.toFixed(1) || 'N/A'}<br>
+                            &nbsp;&nbsp;Win %: ${((sim.with_trade?.win_probability || 0) * 100).toFixed(0)}%<br><br>
+                            <strong>📊 Differential:</strong> ${sim.point_differential?.toFixed(1) || 'N/A'} points
+                        `;
+                        btn.disabled = false;
+                        return;
+                    }
+                    
+                    resultDiv.innerHTML = `
+                        <span class="loading">⏳ Waiting for simulation... (attempt ${i + 1}/${maxAttempts})</span>
+                    `;
+                }
+                
+                resultDiv.innerHTML = '<span class="error">⚠️ Simulation taking longer than expected. Check logs.</span>';
+                btn.disabled = false;
+                
+            } catch (err) {
+                resultDiv.innerHTML = `<span class="error">❌ Error: ${err.message}</span>`;
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -26,11 +26,12 @@ class TradeSessionManager:
         self.active_sessions: Dict[str, Dict] = {}
         self.session_callbacks: Dict[str, List[Callable]] = {}
     
-    async def create_trade_session(self, trade_preference: TradePreferenceRequest) -> tuple[str, bool]:
+    async def create_trade_session(self, user_id: int, trade_preference: TradePreferenceRequest) -> tuple[str, bool]:
         """
         Create a new trade negotiation session.
         
         Args:
+            user_id: ID of the user creating the session
             trade_preference: Trade preference request from initiating team
             
         Returns:
@@ -53,7 +54,19 @@ class TradeSessionManager:
                     logger.error(f"Target team {target_team_id} not found")
                     return session_id, False
             
-            # Store session info
+            # Create the DB session record first to guarantee persistence before any callbacks
+            max_turns = trade_preference.max_turns if hasattr(trade_preference, 'max_turns') else 10
+            try:
+                db_session = self.repository.create_trade_session(
+                    session_id, user_id, trade_preference.team_id, 
+                    trade_preference.target_team_ids, max_turns
+                )
+                logger.info(f"Created DB session record for {session_id}")
+            except Exception as e:
+                logger.error(f"Failed to create DB session record for {session_id}: {e}")
+                return session_id, False
+            
+            # Store session info in memory
             self.active_sessions[session_id] = {
                 "initiating_team_id": trade_preference.team_id,
                 "target_team_ids": trade_preference.target_team_ids,
@@ -95,6 +108,7 @@ class TradeSessionManager:
             # Start the negotiation
             success = await self.orchestrator.start_negotiation(
                 session_id=session_id,
+                user_id=user_id,
                 initiating_team_id=trade_preference.team_id,
                 target_team_ids=trade_preference.target_team_ids,
                 trade_preferences=trade_preference.dict(),

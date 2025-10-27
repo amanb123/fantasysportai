@@ -4,17 +4,115 @@ Database seeding script to populate the Fantasy Basketball League with initial d
 
 import logging
 import argparse
+from typing import Optional, Dict, List
 from sqlmodel import select
 from session.models import TeamModel, PlayerModel, PositionEnum
 from session.database import init_database, get_repository
 from config import settings
+from services.redis_service import RedisService
+from services.player_cache_service import PlayerCacheService
+from services.sleeper_service import sleeper_service
+from services.player_mapper import map_sleeper_to_player_model, filter_active_players
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def seed_database(reset: bool = False):
+def load_players_from_sleeper_cache() -> Optional[Dict[str, Dict]]:
+    """
+    Load players from Sleeper cache if available.
+    
+    Returns:
+        Dict: Player dictionary or None if cache unavailable
+    """
+    try:
+        # Initialize Redis and cache services
+        redis_service = RedisService()
+        if not redis_service.is_connected():
+            logger.warning("Redis connection failed, cannot load Sleeper cache")
+            return None
+        
+        player_cache_service = PlayerCacheService(redis_service, sleeper_service)
+        
+        # Try to get cached players
+        cached_players = player_cache_service.get_cached_players()
+        if cached_players is None:
+            logger.warning("Sleeper player cache is empty")
+            return None
+        
+        # Filter for active players only
+        active_players = filter_active_players(cached_players)
+        
+        logger.info(f"Loaded {len(active_players)} active players from Sleeper cache")
+        return active_players
+        
+    except Exception as e:
+        logger.error(f"Error loading players from Sleeper cache: {e}")
+        return None
+
+
+def create_players_from_sleeper_data(sleeper_players: Dict[str, Dict], team_info: List[Dict]) -> Dict[str, List[PlayerModel]]:
+    """
+    Create PlayerModel instances from Sleeper data for each team.
+    
+    Args:
+        sleeper_players: Dictionary of Sleeper player data
+        team_info: List of team information dictionaries
+        
+    Returns:
+        Dict: Team name -> List of PlayerModel instances
+    """
+    # Team-to-Sleeper mapping
+    team_sleeper_mapping = {
+        "Lakers": "LAL",
+        "Warriors": "GSW", 
+        "Celtics": "BOS"
+    }
+    
+    team_players = {}
+    
+    for team in team_info:
+        team_name = team["name"]
+        team_id = team["id"]
+        sleeper_team_code = team_sleeper_mapping.get(team_name)
+        
+        if not sleeper_team_code:
+            logger.warning(f"No Sleeper mapping for team {team_name}")
+            continue
+        
+        # Filter players by team
+        team_sleeper_players = []
+        for player_id, player_data in sleeper_players.items():
+            if player_data.get("team") == sleeper_team_code:
+                team_sleeper_players.append(player_data)
+        
+        logger.info(f"Found {len(team_sleeper_players)} {team_name} players in Sleeper cache")
+        
+        # Sort players by name and take first 13
+        team_sleeper_players.sort(key=lambda p: p.get("name", ""))
+        selected_players = team_sleeper_players[:13]
+        
+        # Convert to PlayerModel instances
+        player_models = []
+        for sleeper_player in selected_players:
+            try:
+                player_model = map_sleeper_to_player_model(sleeper_player, team_id)
+                player_models.append(player_model)
+            except Exception as e:
+                logger.error(f"Error mapping player {sleeper_player.get('name')}: {e}")
+        
+        logger.info(f"Created {len(player_models)} PlayerModel instances for {team_name}")
+        team_players[team_name] = player_models
+        
+        # If we don't have enough players, we'll fall back to hardcoded later
+        if len(player_models) < 13:
+            logger.warning(f"{team_name} only has {len(player_models)} players from Sleeper, will supplement with hardcoded data")
+    
+    return team_players
+
+
+def seed_database(reset: bool = False, use_sleeper: bool = False):
     """Seed the database with 3 teams and 13 players each."""
     
     try:
@@ -63,7 +161,18 @@ def seed_database(reset: bool = False):
                     team_info.append({"id": team.id, "name": team.name})
                     logger.info(f"Created team: {team.name}")
         
-        # Define player data for each team (salaries scaled to stay under $100M cap)
+        # Determine player data source
+        sleeper_player_models = {}
+        if use_sleeper:
+            logger.info("Attempting to use Sleeper cached data...")
+            sleeper_players = load_players_from_sleeper_cache()
+            if sleeper_players:
+                sleeper_player_models = create_players_from_sleeper_data(sleeper_players, team_info)
+                logger.info(f"Successfully loaded Sleeper data for {len(sleeper_player_models)} teams")
+            else:
+                logger.warning("Sleeper cache unavailable, falling back to hardcoded data")
+        
+        # Define hardcoded player data for each team (fallback or default)
         players_data = {
             "Lakers": [
                 # Core positions
@@ -123,7 +232,7 @@ def seed_database(reset: bool = False):
         total_players = 0
         
         for team in team_info:
-            team_players_data = players_data[team["name"]]
+            team_name = team["name"]
             team_salary = 0
             
             # Check if team already has players
@@ -133,13 +242,49 @@ def seed_database(reset: bool = False):
                 ).all()
                 
                 if existing_players:
-                    logger.info(f"Team {team['name']} already has {len(existing_players)} players, skipping player creation")
+                    logger.info(f"Team {team_name} already has {len(existing_players)} players, skipping player creation")
                     team_salary = sum(player.salary for player in existing_players)
                     total_players += len(existing_players)
                 else:
-                    # Create players for this team
-                    for player_data in team_players_data:
-                        with repository.get_session() as session:
+                    # Determine which player data to use
+                    players_to_create = []
+                    data_source = "hardcoded"
+                    
+                    if use_sleeper and team_name in sleeper_player_models:
+                        sleeper_players = sleeper_player_models[team_name]
+                        if len(sleeper_players) >= 13:
+                            players_to_create = sleeper_players
+                            data_source = "Sleeper cache"
+                        else:
+                            # Supplement with hardcoded data
+                            players_to_create = sleeper_players
+                            hardcoded_needed = 13 - len(sleeper_players)
+                            hardcoded_players = players_data[team_name][:hardcoded_needed]
+                            
+                            # Convert hardcoded data to PlayerModel instances
+                            for player_data in hardcoded_players:
+                                player = PlayerModel(
+                                    name=player_data["name"],
+                                    team_id=team["id"],
+                                    position=PositionEnum(player_data["position"]),
+                                    salary=player_data["salary"],
+                                    points_per_game=player_data["ppg"],
+                                    rebounds_per_game=player_data["rpg"],
+                                    assists_per_game=player_data["apg"],
+                                    steals_per_game=player_data["spg"],
+                                    blocks_per_game=player_data["bpg"],
+                                    turnovers_per_game=player_data["tov"],
+                                    field_goal_percentage=player_data["fg"],
+                                    three_point_percentage=player_data["3pt"],
+                                )
+                                players_to_create.append(player)
+                            
+                            data_source = f"Sleeper cache + hardcoded supplement"
+                            logger.info(f"Supplementing {team_name} with {hardcoded_needed} hardcoded players")
+                    else:
+                        # Use hardcoded data
+                        hardcoded_players = players_data[team_name]
+                        for player_data in hardcoded_players:
                             player = PlayerModel(
                                 name=player_data["name"],
                                 team_id=team["id"],
@@ -152,11 +297,18 @@ def seed_database(reset: bool = False):
                                 blocks_per_game=player_data["bpg"],
                                 turnovers_per_game=player_data["tov"],
                                 field_goal_percentage=player_data["fg"],
-                                three_point_percentage=player_data["3pt"]
+                                three_point_percentage=player_data["3pt"],
                             )
+                            players_to_create.append(player)
+                    
+                    logger.info(f"Creating {len(players_to_create)} players for {team_name} using {data_source}")
+                    
+                    # Create players in database
+                    for player in players_to_create:
+                        with repository.get_session() as session:
                             session.add(player)
                             session.commit()
-                            team_salary += player_data["salary"]
+                            team_salary += player.salary
                             total_players += 1
                             logger.info(f"Created player: {player.name} ({player.position.value}) - ${player.salary:,}")
             
@@ -192,6 +344,7 @@ def seed_database(reset: bool = False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Seed the Fantasy Basketball League database")
     parser.add_argument("--reset", action="store_true", help="Reset database before seeding")
+    parser.add_argument("--use-sleeper", action="store_true", help="Use Sleeper cached data instead of hardcoded players")
     args = parser.parse_args()
     
-    seed_database(reset=args.reset)
+    seed_database(reset=args.reset, use_sleeper=args.use_sleeper)

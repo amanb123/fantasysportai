@@ -1,0 +1,208 @@
+"""
+NBA Schedule Cache Service
+
+Fetches and caches the full NBA season schedule.
+The schedule is static once released, so we cache it for the entire season.
+"""
+
+import logging
+from typing import List, Dict, Optional
+from datetime import datetime, timedelta, date
+import json
+
+from backend.services.redis_service import RedisService
+
+logger = logging.getLogger(__name__)
+
+
+class NBAScheduleCacheService:
+    """Service for caching NBA season schedule."""
+    
+    # Cache key for full season schedule
+    SCHEDULE_CACHE_KEY = "nba:schedule:2025-26"
+    
+    # Cache for 90 days (schedule is static)
+    SCHEDULE_TTL = 90 * 24 * 60 * 60  # 90 days in seconds
+    
+    def __init__(self, redis_service: RedisService, nba_mcp_service=None):
+        """
+        Initialize schedule cache service.
+        
+        Args:
+            redis_service: Redis service for caching
+            nba_mcp_service: NBA MCP service for fetching schedule
+        """
+        self.redis = redis_service
+        self.nba_mcp = nba_mcp_service
+        self._memory_cache = None
+    
+    async def get_full_season_schedule(self) -> List[Dict]:
+        """
+        Get the full 2025-26 NBA regular season schedule.
+        Uses triple caching: memory -> Redis -> API fetch
+        
+        Returns:
+            List of game dictionaries for the entire season
+        """
+        logger.debug(f"get_full_season_schedule called. redis={self.redis}, nba_mcp={self.nba_mcp}")
+        
+        # Check memory cache first
+        if self._memory_cache is not None:
+            logger.info(f"Returning {len(self._memory_cache)} games from memory cache")
+            return self._memory_cache
+        
+        try:
+            # Check Redis cache
+            if self.redis is None:
+                logger.warning("Redis service is None! Cannot use Redis caching")
+            else:
+                cached_data = await self.redis.get(self.SCHEDULE_CACHE_KEY)
+    
+    async def _fetch_full_schedule(self) -> List[Dict]:
+        """
+        Fetch the full 2025-26 NBA season schedule.
+        
+        Returns:
+            List of game dictionaries
+        """
+        games = []
+        
+        # NBA 2025-26 season dates (approximate)
+        # Regular season: Oct 22, 2025 - Apr 13, 2026
+        start_date = date(2025, 10, 22)
+        end_date = date(2026, 4, 13)
+        
+        if not self.nba_mcp or not self.nba_mcp._client:
+            logger.warning("NBA MCP service not available for schedule fetch")
+            return []
+        
+        try:
+            # Ensure MCP is initialized
+            if not hasattr(self.nba_mcp, '_initialized') or not self.nba_mcp._initialized:
+                logger.info("Waiting for MCP to initialize...")
+                await self.nba_mcp.initialize()
+            
+            # Fetch games for each day in the season
+            current_date = start_date
+            total_days = (end_date - start_date).days + 1
+            
+            logger.info(f"Fetching schedule from {start_date} to {end_date} ({total_days} days)")
+            
+            day_count = 0
+            while current_date <= end_date:
+                try:
+                    # Fetch games for this date
+                    daily_games = await self.nba_mcp._client.get_games_by_date(current_date)
+                    
+                    if daily_games:
+                        games.extend(daily_games)
+                        logger.debug(f"Found {len(daily_games)} games on {current_date}")
+                    
+                    day_count += 1
+                    if day_count % 30 == 0:
+                        logger.info(f"Progress: {day_count}/{total_days} days fetched, {len(games)} total games")
+                    
+                except Exception as e:
+                    logger.warning(f"Error fetching games for {current_date}: {e}")
+                
+                current_date += timedelta(days=1)
+            
+            logger.info(f"Successfully fetched {len(games)} games for 2025-26 season")
+            return games
+            
+        except Exception as e:
+            logger.error(f"Error fetching full schedule: {e}")
+            return []
+    
+    async def get_games_for_date_range(
+        self,
+        start_date: date,
+        end_date: date,
+        team_tricodes: Optional[List[str]] = None
+    ) -> List[Dict]:
+        """
+        Get games for a specific date range from the cached schedule.
+        
+        Args:
+            start_date: Start date
+            end_date: End date
+            team_tricodes: Optional list of team abbreviations to filter by
+            
+        Returns:
+            List of games in the date range
+        """
+        try:
+            full_schedule = await self.get_full_season_schedule()
+            
+            filtered_games = []
+            for game in full_schedule:
+                # Parse game date
+                game_date_str = game.get('GAME_DATE_EST', game.get('game_date', ''))
+                if not game_date_str:
+                    continue
+                
+                try:
+                    # Handle different date formats
+                    if 'T' in game_date_str:
+                        game_date = datetime.fromisoformat(game_date_str.replace('Z', '+00:00')).date()
+                    else:
+                        game_date = datetime.strptime(game_date_str[:10], '%Y-%m-%d').date()
+                except:
+                    continue
+                
+                # Check date range
+                if not (start_date <= game_date <= end_date):
+                    continue
+                
+                # Check team filter
+                if team_tricodes:
+                    home_team = game.get('HOME_TEAM_ABBREVIATION', game.get('home_team_tricode', ''))
+                    away_team = game.get('VISITOR_TEAM_ABBREVIATION', game.get('away_team_tricode', ''))
+                    
+                    if home_team not in team_tricodes and away_team not in team_tricodes:
+                        continue
+                
+                filtered_games.append(game)
+            
+            logger.info(f"Found {len(filtered_games)} games from {start_date} to {end_date}")
+            return filtered_games
+            
+        except Exception as e:
+            logger.error(f"Error filtering games by date range: {e}")
+            return []
+    
+    async def invalidate_cache(self):
+        """Invalidate the schedule cache (useful if schedule changes)."""
+        try:
+            await self.redis.delete(self.SCHEDULE_CACHE_KEY)
+            self._memory_cache = None
+            logger.info("Schedule cache invalidated")
+        except Exception as e:
+            logger.error(f"Error invalidating schedule cache: {e}")
+
+
+# Singleton instance
+_schedule_cache_service: Optional[NBAScheduleCacheService] = None
+
+
+def get_schedule_cache_service(
+    redis_service: RedisService = None,
+    nba_mcp_service = None
+) -> Optional[NBAScheduleCacheService]:
+    """
+    Get or create the schedule cache service singleton.
+    
+    Args:
+        redis_service: Redis service (required for first call)
+        nba_mcp_service: NBA MCP service (required for first call)
+        
+    Returns:
+        Schedule cache service instance or None if disabled
+    """
+    global _schedule_cache_service
+    
+    if _schedule_cache_service is None:
+        if redis_service and nba_mcp_service:
+            _schedule_cache_service = NBAScheduleCacheService(redis_service, nba_mcp_service)
+    
+    return _schedule_cache_service

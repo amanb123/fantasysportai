@@ -1,9 +1,12 @@
 /**
- * WebSocket Service for real-time trade negotiation updates
+ * WebSocket Service for real-time trade negotiation updates and league roster updates
  */
 class WebSocketService {
-  constructor(sessionId, callbacks = {}) {
+  constructor(sessionId, callbacks = {}, connectionType = 'trade', leagueId = null, chatSessionId = null) {
     this.sessionId = sessionId
+    this.leagueId = leagueId
+    this.chatSessionId = chatSessionId
+    this.connectionType = connectionType
     this.callbacks = callbacks
     this.ws = null
     this.reconnectAttempts = 0
@@ -15,10 +18,19 @@ class WebSocketService {
 
   connect() {
     try {
-      const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL || 'ws://localhost:8000'
-      const wsUrl = `${wsBaseUrl}/ws/trade/${this.sessionId}`
+      const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL || 'ws://localhost:3002'
       
-      console.log(`Connecting to WebSocket: ${wsUrl}`)
+      // Determine URL based on connection type
+      let wsUrl
+      if (this.connectionType === 'chat' && this.chatSessionId) {
+        wsUrl = `${wsBaseUrl}/ws/roster-chat/${this.chatSessionId}`
+      } else if (this.connectionType === 'league' && this.leagueId) {
+        wsUrl = `${wsBaseUrl}/ws/league/${this.leagueId}`
+      } else {
+        wsUrl = `${wsBaseUrl}/ws/trade/${this.sessionId}`
+      }
+      
+      console.log(`Connecting to WebSocket (${this.connectionType}):`, wsUrl)
       this.ws = new WebSocket(wsUrl)
 
       this.ws.onopen = () => {
@@ -96,6 +108,18 @@ class WebSocketService {
       case 'error':
         if (this.callbacks.onError) {
           this.callbacks.onError(message.data?.message || 'Server error')
+        }
+        break
+
+      case 'roster_update':
+        if (this.callbacks.onRosterUpdate) {
+          this.callbacks.onRosterUpdate(message)
+        }
+        break
+
+      case 'chat_message':
+        if (this.callbacks.onChatMessage) {
+          this.callbacks.onChatMessage(message.data)
         }
         break
 
@@ -184,13 +208,33 @@ class WebSocketService {
 }
 
 /**
- * Factory function to create WebSocket connection
+ * Factory function to create WebSocket connection for trade sessions
  * @param {string} sessionId - Session ID for the trade negotiation
  * @param {Object} callbacks - Callback functions for events
  * @returns {WebSocketService} WebSocket service instance
  */
 export const createWebSocketConnection = (sessionId, callbacks = {}) => {
-  return new WebSocketService(sessionId, callbacks)
+  return new WebSocketService(sessionId, callbacks, 'trade')
+}
+
+/**
+ * Factory function to create WebSocket connection for league updates
+ * @param {string} leagueId - Sleeper league ID
+ * @param {Object} callbacks - Callback functions for events (onConnect, onRosterUpdate, onError, onDisconnect)
+ * @returns {WebSocketService} WebSocket service instance
+ */
+export const createLeagueWebSocketConnection = (leagueId, callbacks = {}) => {
+  return new WebSocketService(null, callbacks, 'league', leagueId)
+}
+
+/**
+ * Factory function to create WebSocket connection for roster chat
+ * @param {string} sessionId - Chat session ID
+ * @param {Object} callbacks - Callback functions for events (onConnect, onChatMessage, onError, onDisconnect)
+ * @returns {WebSocketService} WebSocket service instance
+ */
+export const createChatWebSocketConnection = (sessionId, callbacks = {}) => {
+  return new WebSocketService(null, callbacks, 'chat', null, sessionId)
 }
 
 export default WebSocketService

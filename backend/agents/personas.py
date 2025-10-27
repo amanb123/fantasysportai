@@ -109,24 +109,32 @@ def get_team_agent_system_message(team_name: str, roster_data: dict, trade_prefe
     # Get base persona
     base_persona = TEAM_AGENT_PERSONAS.get(team_name.lower(), TEAM_AGENT_PERSONAS["default"])
     
+    # Handle both dict and Pydantic object formats
+    def safe_get(obj, key, default=None):
+        if hasattr(obj, key):
+            return getattr(obj, key)
+        elif isinstance(obj, dict):
+            return obj.get(key, default)
+        return default
+    
     # Build roster summary
-    total_salary = roster_data.get('total_salary', 0)
-    players = roster_data.get('players', [])
+    total_salary = safe_get(roster_data, 'total_salary', 0)
+    players = safe_get(roster_data, 'players', [])
     
     roster_summary = f"Current Roster ({len(players)} players, ${total_salary:,}):\n"
     
     # Group by position for summary
     by_position = {}
     for player in players:
-        pos = player.get('position', 'Unknown')
+        pos = safe_get(player, 'position', 'Unknown')
         if pos not in by_position:
             by_position[pos] = []
         by_position[pos].append(player)
     
     for pos in ['PG', 'SG', 'SF', 'PF', 'C']:
         if pos in by_position:
-            pos_players = sorted(by_position[pos], key=lambda p: p.get('salary', 0), reverse=True)
-            roster_summary += f"{pos}: {', '.join([p.get('name', 'Unknown') for p in pos_players])}\n"
+            pos_players = sorted(by_position[pos], key=lambda p: safe_get(p, 'salary', 0), reverse=True)
+            roster_summary += f"{pos}: {', '.join([safe_get(p, 'name', 'Unknown') for p in pos_players])}\n"
     
     # Build comprehensive trade preference summary
     pref_summary = "Trade Preferences & Strategy:\n"
@@ -142,21 +150,23 @@ def get_team_agent_system_message(team_name: str, roster_data: dict, trade_prefe
     # Budget and salary considerations
     if 'budget_range' in trade_preference:
         budget = trade_preference['budget_range']
-        pref_summary += f"- Budget Range: ${budget.get('min', 0):,} - ${budget.get('max', 0):,}\n"
+        budget_min = safe_get(budget, 'min', 0) if isinstance(budget, dict) else budget.get('min', 0) if hasattr(budget, 'get') else 0
+        budget_max = safe_get(budget, 'max', 0) if isinstance(budget, dict) else budget.get('max', 0) if hasattr(budget, 'get') else 0
+        pref_summary += f"- Budget Range: ${budget_min:,} - ${budget_max:,}\n"
     
     # Strategic preferences
     strategic_goals = []
-    if trade_preference.get('improve_defense', False):
+    if safe_get(trade_preference, 'improve_defense', False):
         strategic_goals.append("Improve Defense")
-    if trade_preference.get('improve_offense', False):
+    if safe_get(trade_preference, 'improve_offense', False):
         strategic_goals.append("Improve Offense") 
-    if trade_preference.get('improve_rebounding', False):
+    if safe_get(trade_preference, 'improve_rebounding', False):
         strategic_goals.append("Improve Rebounding")
-    if trade_preference.get('improve_assists', False):
+    if safe_get(trade_preference, 'improve_assists', False):
         strategic_goals.append("Improve Assists")
-    if trade_preference.get('improve_scoring', False):
+    if safe_get(trade_preference, 'improve_scoring', False):
         strategic_goals.append("Improve Scoring")
-    if trade_preference.get('reduce_turnovers', False):
+    if safe_get(trade_preference, 'reduce_turnovers', False):
         strategic_goals.append("Reduce Turnovers")
     
     if strategic_goals:
@@ -200,9 +210,17 @@ def get_commissioner_system_message(all_teams_data: dict, salary_cap: int, conse
     # Build league context
     league_summary = f"League Overview ({len(all_teams_data)} teams):\n"
     
+    # Handle both dict and Pydantic object formats
+    def safe_get(obj, key, default=None):
+        if hasattr(obj, key):
+            return getattr(obj, key)
+        elif isinstance(obj, dict):
+            return obj.get(key, default)
+        return default
+    
     for team_name, team_data in all_teams_data.items():
-        salary = team_data.get('total_salary', 0)
-        players = team_data.get('players', [])
+        salary = safe_get(team_data, 'total_salary', 0)
+        players = safe_get(team_data, 'players', [])
         cap_space = salary_cap - salary
         league_summary += f"- {team_name}: {len(players)} players, ${salary:,} (${cap_space:,} cap space)\n"
     

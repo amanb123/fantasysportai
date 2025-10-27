@@ -14,10 +14,14 @@ sys.path.insert(0, project_root)
 import uvicorn
 
 if __name__ == "__main__":
+    # Disable reload when output is redirected to avoid file descriptor issues
+    # Use reload=True only when running in an interactive terminal
+    use_reload = sys.stdout.isatty()
+    
     uvicorn.run(
         "backend.main:app",
         host="127.0.0.1",
         port=3002,
-        reload=True,
-        reload_dirs=[project_root]
+        reload=use_reload,
+        reload_dirs=[project_root] if use_reload else None
     )
