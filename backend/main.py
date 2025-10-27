@@ -207,7 +207,7 @@ logger.info(f"CORS Origins: {cors_origins}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",  # Allow all Vercel preview URLs
+    allow_origin_regex=r"https://.*\.vercel\.app$",  # Allow all Vercel preview URLs (e.g., fantasysportai-*.vercel.app)
     allow_credentials=(cors_origins != ["*"]),  # Only allow credentials if not using wildcard
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
