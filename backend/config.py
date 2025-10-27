@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     agent_consensus_keyword: str = Field(default="TRADE_APPROVED", description="Keyword for consensus detection")
     
     # Authentication Configuration
-    SECRET_KEY: str = Field(description="JWT signing secret key (required)")
+    SECRET_KEY: str = Field(default="dev-secret-key-change-in-production", description="JWT signing secret key")
     ALGORITHM: str = Field(default="HS256", description="JWT algorithm")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, description="JWT token expiration time in minutes")
     
