@@ -5,6 +5,7 @@ Redis service for caching operations.
 import json
 import logging
 from typing import Optional, Dict, Any, List
+from urllib.parse import urlparse
 import redis
 from redis.connection import ConnectionPool
 
@@ -17,15 +18,30 @@ class RedisService:
     """Redis service for caching operations with connection pooling."""
     
     def __init__(self, redis_host: str = None, redis_port: int = None, redis_db: int = None,
-                 redis_password: str = None, redis_ssl: bool = None, decode_responses: bool = None):
+                 redis_password: str = None, redis_ssl: bool = None, decode_responses: bool = None,
+                 redis_url: str = None):
         """Initialize Redis service with configuration."""
-        # Use provided parameters or fall back to settings
-        self.host = redis_host or settings.REDIS_HOST
-        self.port = redis_port or settings.REDIS_PORT
-        self.db = redis_db or settings.REDIS_DB
-        self.password = redis_password or settings.REDIS_PASSWORD
-        self.ssl = redis_ssl if redis_ssl is not None else settings.REDIS_SSL
-        self.decode_responses = decode_responses if decode_responses is not None else settings.REDIS_DECODE_RESPONSES
+        
+        # If REDIS_URL is provided (Railway/Heroku format), parse it
+        if redis_url or settings.REDIS_URL:
+            url = redis_url or settings.REDIS_URL
+            parsed = urlparse(url)
+            
+            self.host = parsed.hostname or 'localhost'
+            self.port = parsed.port or 6379
+            self.password = parsed.password
+            self.db = int(parsed.path.lstrip('/')) if parsed.path and len(parsed.path) > 1 else 0
+            self.ssl = parsed.scheme == 'rediss'  # rediss:// for SSL
+            self.decode_responses = decode_responses if decode_responses is not None else settings.REDIS_DECODE_RESPONSES
+            logger.info(f"Using REDIS_URL: redis://{self.host}:{self.port}/{self.db}")
+        else:
+            # Use provided parameters or fall back to settings
+            self.host = redis_host or settings.REDIS_HOST
+            self.port = redis_port or settings.REDIS_PORT
+            self.db = redis_db or settings.REDIS_DB
+            self.password = redis_password or settings.REDIS_PASSWORD
+            self.ssl = redis_ssl if redis_ssl is not None else settings.REDIS_SSL
+            self.decode_responses = decode_responses if decode_responses is not None else settings.REDIS_DECODE_RESPONSES
         
         # Initialize connection pool
         self.pool = None

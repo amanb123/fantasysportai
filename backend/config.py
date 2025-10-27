@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     SLEEPER_API_TIMEOUT: int = Field(default=10, description="Sleeper API request timeout in seconds")
     
     # Redis Configuration
+    # Option 1: Use REDIS_URL (Railway/Heroku format: redis://user:pass@host:port/db)
+    REDIS_URL: Optional[str] = Field(default=None, description="Redis connection URL (overrides individual settings)")
+    
+    # Option 2: Use individual settings (for local development)
     REDIS_HOST: str = Field(default="localhost", description="Redis server host")
     REDIS_PORT: int = Field(default=6379, description="Redis server port")
     REDIS_DB: int = Field(default=0, description="Redis database number")
