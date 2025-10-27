@@ -1,27 +1,3 @@
-from typing import Optional
-from backend.services.roster_ranking_service import RosterRankingService
-_roster_ranking_service = None
-def get_roster_ranking_service() -> Optional[RosterRankingService]:
-    global _roster_ranking_service
-    if _roster_ranking_service is not None:
-        return _roster_ranking_service
-    nba_mcp_service = get_nba_mcp_service()
-    nba_stats_service = get_nba_stats_service()  # For per-game stats
-    sleeper_service = get_sleeper_service()
-    redis_service = get_redis_service()
-    league_cache_service = get_league_data_cache_service()
-    if not (nba_mcp_service and sleeper_service and redis_service and league_cache_service):
-        logger.warning("RosterRankingService dependencies unavailable")
-        return None
-    _roster_ranking_service = RosterRankingService(
-        nba_mcp_service=nba_mcp_service,
-        sleeper_service=sleeper_service,
-        redis_service=redis_service,
-        league_cache_service=league_cache_service,
-        nba_stats_service=nba_stats_service  # Optional - service will work without it
-    )
-    logger.info("RosterRankingService initialized")
-    return _roster_ranking_service
 """
 Shared dependency injection functions for FastAPI.
 """
@@ -255,6 +231,60 @@ def get_nba_cache_service():
             return None
     
     return _nba_cache_service
+
+
+# ===== Roster Ranking Service Dependencies =====
+
+_roster_ranking_service = None
+
+
+def get_roster_ranking_service() -> Optional['RosterRankingService']:
+    """
+    Dependency to get the roster ranking service.
+    
+    Returns:
+        RosterRankingService: Singleton instance or None if unavailable
+    """
+    global _roster_ranking_service
+    
+    if _roster_ranking_service is None:
+        try:
+            from backend.services.roster_ranking_service import RosterRankingService
+            
+            # Get dependencies
+            nba_stats_service = get_nba_stats_service()  # For per-game stats
+            sleeper_service = get_sleeper_service()
+            redis_service = get_redis_service()
+            league_cache_service = get_league_data_cache_service()
+            
+            # Check critical dependencies (nba_stats_service can work without MCP)
+            if not (sleeper_service and redis_service and league_cache_service):
+                logger.warning("RosterRankingService dependencies unavailable")
+                return None
+            
+            # NBA stats service is optional but recommended
+            if not nba_stats_service:
+                logger.warning("RosterRankingService: NBAStatsService unavailable - using fallback logic")
+            
+            # Get NBA MCP service (optional - for advanced features)
+            nba_mcp_service = get_nba_mcp_service()
+            
+            _roster_ranking_service = RosterRankingService(
+                nba_mcp_service=nba_mcp_service,  # Can be None
+                sleeper_service=sleeper_service,
+                redis_service=redis_service,
+                league_cache_service=league_cache_service,
+                nba_stats_service=nba_stats_service  # Can be None
+            )
+            logger.info("RosterRankingService initialized")
+            
+        except Exception as e:
+            logger.error(f"Failed to create RosterRankingService: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+    
+    return _roster_ranking_service
 
 
 # Roster Context Builder
