@@ -200,12 +200,14 @@ if not settings.cors_origins or settings.cors_origins == "http://localhost:3000,
 
 logger.info(f"CORS Origins: {cors_origins}")
 
-# Add CORS middleware
+# Add CORS middleware with regex support for Vercel preview deployments
+# Vercel generates URLs like: fantasysportai-*.vercel.app
 # Note: allow_credentials=True cannot be used with allow_origins=["*"]
 # So we disable credentials when using wildcard
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",  # Allow all Vercel preview URLs
     allow_credentials=(cors_origins != ["*"]),  # Only allow credentials if not using wildcard
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
