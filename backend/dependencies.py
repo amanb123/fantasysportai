@@ -157,29 +157,10 @@ def get_nba_stats_service():
     return _nba_stats_service
 
 
-def get_nba_mcp_service():
-    """
-    Dependency to get the NBA MCP service.
-    
-    Returns:
-        NBAMCPService: Singleton NBA MCP service instance or None if disabled
-    """
-    if not settings.nba_mcp_enabled or not settings.nba_mcp_server_path:
-        return None
-    
-    try:
-        from backend.services.nba_mcp_service import get_nba_mcp_service as _get_mcp
-        return _get_mcp()
-    except Exception as e:
-        logger.error(f"Failed to get NBA MCP service: {e}")
-        return None
-
-
 def get_nba_news_service() -> Optional[NBANewsService]:
     """
     Dependency to get the NBA News service.
-    
-    Returns:
+```    Returns:
         NBANewsService: Singleton NBA News service instance
     """
     global _nba_news_service
@@ -266,11 +247,7 @@ def get_roster_ranking_service() -> Optional['RosterRankingService']:
             if not nba_stats_service:
                 logger.warning("RosterRankingService: NBAStatsService unavailable - using fallback logic")
             
-            # Get NBA MCP service (optional - for advanced features)
-            nba_mcp_service = get_nba_mcp_service()
-            
             _roster_ranking_service = RosterRankingService(
-                nba_mcp_service=nba_mcp_service,  # Can be None
                 sleeper_service=sleeper_service,
                 redis_service=redis_service,
                 league_cache_service=league_cache_service,
@@ -312,17 +289,6 @@ def get_roster_context_builder() -> Optional['RosterContextBuilder']:
             nba_stats = get_nba_stats_service()  # May be None if nba_api unavailable
             repository = get_basketball_repository()
             
-            # Get NBA MCP service (optional, for schedule/player data)
-            nba_mcp = None
-            if settings.nba_mcp_enabled and settings.nba_mcp_server_path:
-                try:
-                    from backend.services.nba_mcp_service import get_nba_mcp_service
-                    nba_mcp = get_nba_mcp_service()
-                    if nba_mcp:
-                        logger.info("NBA MCP Service available for roster context")
-                except Exception as mcp_err:
-                    logger.warning(f"NBA MCP Service unavailable for roster context: {mcp_err}")
-            
             # Check critical dependencies
             if not player_cache:
                 logger.warning("Cannot create RosterContextBuilder: PlayerCacheService unavailable")
@@ -345,14 +311,13 @@ def get_roster_context_builder() -> Optional['RosterContextBuilder']:
             except Exception as ranking_err:
                 logger.warning(f"Roster ranking service unavailable for roster context: {ranking_err}")
             
-            # Create service (nba_stats, nba_mcp, and roster_ranking can be None)
+            # Create service (nba_stats and roster_ranking can be None)
             _roster_context_builder = RosterContextBuilder(
                 player_cache_service=player_cache,
                 league_data_cache_service=league_cache,
                 nba_cache_service=nba_cache,
                 nba_stats_service=nba_stats,
                 basketball_repository=repository,
-                nba_mcp_service=nba_mcp,
                 roster_ranking_service=roster_ranking
             )
             
@@ -385,11 +350,10 @@ def get_trade_analysis_service():
             from backend.services.trade_analysis_service import TradeAnalysisService
             from backend.agents.agent_factory import AgentFactory
             
-            # Get services (NBA MCP is optional)
+            # Get services
             sleeper = get_sleeper_service()
             agent_factory = AgentFactory()
             nba_news = get_nba_news_service()
-            nba_mcp = get_nba_mcp_service()  # Optional
             nba_stats = get_nba_stats_service()  # Fallback
             nba_cache = get_nba_cache_service()  # For schedules
             
@@ -398,15 +362,14 @@ def get_trade_analysis_service():
                 logger.warning("Cannot create TradeAnalysisService: Sleeper service unavailable")
                 return None
             
-            # At least one NBA data source is recommended
-            if not (nba_mcp or nba_stats):
+            # NBA stats service is recommended
+            if not nba_stats:
                 logger.warning("TradeAnalysisService: No NBA data services available - limited functionality")
             
             _trade_analysis_service = TradeAnalysisService(
                 agent_factory=agent_factory,
                 sleeper_service=sleeper,
                 nba_news_service=nba_news,
-                nba_mcp_service=nba_mcp,  # Can be None
                 nba_stats_service=nba_stats,  # Can be None
                 nba_cache_service=nba_cache  # Can be None
             )
@@ -436,16 +399,18 @@ def get_matchup_simulation_service():
             from backend.services.matchup_simulation_service import MatchupSimulationService
             
             # Get required dependencies
-            nba_mcp = get_nba_mcp_service()
-            if nba_mcp is None:
-                logger.warning("Cannot create MatchupSimulationService: NBA MCP unavailable")
-                return None
-            
             sleeper = get_sleeper_service()
             nba_stats = get_nba_stats_service()
             
+            if not sleeper:
+                logger.warning("Cannot create MatchupSimulationService: Sleeper service unavailable")
+                return None
+            
+            if not nba_stats:
+                logger.warning("Cannot create MatchupSimulationService: NBA Stats service unavailable")
+                return None
+            
             _matchup_simulation_service = MatchupSimulationService(
-                nba_mcp_service=nba_mcp,
                 sleeper_service=sleeper,
                 nba_stats_service=nba_stats
             )

@@ -1,11 +1,9 @@
 #!/bin/bash
 
 # Start Local Development Environment
-# Configured to match production (no NBA MCP)
 
 echo "🏀 Starting Fantasy Basketball League - Local Development Mode"
 echo "=================================================="
-echo "Configuration: Production-like (NBA MCP disabled)"
 echo "Backend: http://localhost:3002"
 echo "Frontend: Run 'npm run dev' in frontend/ folder"
 echo "=================================================="
@@ -21,10 +19,7 @@ if [ ! -d ".venv" ]; then
     exit 1
 fi
 
-# Export production-like environment variables
-export NBA_MCP_ENABLED=false
-export nba_mcp_enabled=false
-export nba_mcp_server_path=""
+# Export environment variables
 export NBA_STATS_ENABLED=true
 export nba_stats_enabled=true
 export CORS_ORIGINS="http://localhost:3000,http://localhost:5173"

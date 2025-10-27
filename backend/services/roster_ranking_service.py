@@ -11,8 +11,7 @@ from backend.config import settings
 logger = logging.getLogger(__name__)
 
 class RosterRankingService:
-    def __init__(self, nba_mcp_service, sleeper_service, redis_service, league_cache_service, nba_stats_service=None):
-        self.nba_mcp_service = nba_mcp_service
+    def __init__(self, sleeper_service, redis_service, league_cache_service, nba_stats_service=None):
         self.nba_stats_service = nba_stats_service  # For per-game stats
         self.sleeper_service = sleeper_service
         self.redis_service = redis_service

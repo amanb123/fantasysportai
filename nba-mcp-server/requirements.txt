@@ -1,6 +1,0 @@
-nba_api
-langchain
-langgraph
-mcp[cli]
-pandas
-pydantic

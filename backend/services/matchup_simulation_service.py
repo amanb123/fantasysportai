@@ -1,19 +1,7 @@
 """
 Matchup Simulation Service
 
-Simulates fantasy basketball matchups using NBA schedu            opponent_points = await self._calculate_projected_points_via_mcp(
-                roster=opponent_roster,
-                all_players=all_players,
-                scoring_settings=scoring_settings,
-                start_date=today,
-                end_date=end_date,
-                players_to_remove=[],
-                players_to_add=[]
-            )
-            
-            logger.info(f"Opponent projected points: {opponent_points}")
-            
-            # Scenario 1: WITHOUT trade projections.
+Simulates fantasy basketball matchups using NBA schedule data and player projections.
 Calculates win probability for next N weeks with/without trade.
 """
 
@@ -22,7 +10,6 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 import json
 
-from backend.services.nba_mcp_service import NBAMCPService
 from backend.services.sleeper_service import SleeperService
 from backend.services.nba_stats_service import NBAStatsService
 from backend.config import settings
@@ -36,11 +23,9 @@ class MatchupSimulationService:
     
     def __init__(
         self,
-        nba_mcp_service: NBAMCPService,
         sleeper_service: SleeperService,
         nba_stats_service: NBAStatsService
     ):
-        self.nba_mcp_service = nba_mcp_service
         self.sleeper_service = sleeper_service
         self.nba_stats_service = nba_stats_service
     

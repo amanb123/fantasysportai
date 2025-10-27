@@ -156,47 +156,6 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Redis initialization failed: {redis_error}")
             logger.warning("Continuing without Redis - Sleeper caching will be unavailable")
         
-        # Initialize NBA MCP Service (if enabled)
-        if settings.nba_mcp_enabled and settings.nba_mcp_server_path:
-            logger.info("🏀 Initializing NBA MCP Service...")
-            try:
-                from backend.services.nba_mcp_service import get_nba_mcp_service
-                from backend.services.nba_schedule_cache_service import get_schedule_cache_service
-                import asyncio
-                
-                nba_mcp_service = get_nba_mcp_service(settings.nba_mcp_server_path)
-                if nba_mcp_service:
-                    # Initialize in background to avoid blocking startup
-                    asyncio.create_task(nba_mcp_service.initialize())
-                    logger.info(f"✅ NBA MCP Service initialization started (server: {settings.nba_mcp_server_path})")
-                    
-                    # Initialize schedule cache service if Redis is available
-                    if redis_service:
-                        schedule_cache = get_schedule_cache_service(redis_service, nba_mcp_service)
-                        nba_mcp_service.set_schedule_cache_service(schedule_cache)
-                        
-                        # Warm up the cache in background (fetch full season schedule)
-                        async def warm_schedule_cache():
-                            try:
-                                await asyncio.sleep(10)  # Wait longer for MCP to fully initialize
-                                logger.info("🗓️  Warming up NBA schedule cache...")
-                                schedule = await schedule_cache.get_full_season_schedule()
-                                logger.info(f"✅ Schedule cache warmed: {len(schedule)} games for 2025-26 season")
-                            except Exception as e:
-                                logger.error(f"Schedule cache warm-up failed: {e}")
-                                import traceback
-                                logger.error(traceback.format_exc())
-                        
-                        asyncio.create_task(warm_schedule_cache())
-            except Exception as mcp_error:
-                logger.error(f"❌ Failed to initialize NBA MCP Service: {mcp_error}")
-                logger.warning("Continuing without NBA MCP Service - NBA data features may be limited")
-        else:
-            if not settings.nba_mcp_enabled:
-                logger.info("ℹ️  NBA MCP Service is disabled (NBA_MCP_ENABLED=false)")
-            else:
-                logger.warning("⚠️  NBA MCP Service path not configured (NBA_MCP_SERVER_PATH not set)")
-        
         # Initialize trade session manager
         global trade_session_manager
         trade_session_manager = TradeSessionManager(repository)
@@ -210,17 +169,6 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("🛑 Shutting down Fantasy Basketball League API")
-    
-    # Close NBA MCP Service connection
-    if settings.nba_mcp_enabled:
-        try:
-            from backend.services.nba_mcp_service import get_nba_mcp_service
-            nba_mcp_service = get_nba_mcp_service()
-            if nba_mcp_service:
-                await nba_mcp_service.close()
-                logger.info("NBA MCP Service connection closed")
-        except Exception as e:
-            logger.warning(f"Error closing NBA MCP Service: {e}")
     
     # Close Redis connection
     try:

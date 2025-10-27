@@ -27,22 +27,18 @@ class TradeAnalysisService:
         agent_factory: AgentFactory,
         sleeper_service: SleeperService,
         nba_news_service=None,
-        nba_mcp_service=None,  # Optional - for enhanced features
-        nba_stats_service=None,  # Fallback when MCP unavailable
+        nba_stats_service=None,  # NBA stats via nba_api
         nba_cache_service=None   # For schedule data
     ):
         self.agent_factory = agent_factory
-        self.nba_mcp_service = nba_mcp_service
         self.nba_stats_service = nba_stats_service
         self.nba_cache_service = nba_cache_service
         self.sleeper_service = sleeper_service
         self.nba_news_service = nba_news_service
         
         # Log which services are available
-        if nba_mcp_service:
-            logger.info("TradeAnalysisService: Using NBA MCP for enhanced features")
-        elif nba_stats_service:
-            logger.info("TradeAnalysisService: Using NBA Stats API (MCP unavailable)")
+        if nba_stats_service:
+            logger.info("TradeAnalysisService: Using NBA Stats API")
         else:
             logger.warning("TradeAnalysisService: No NBA data services available - limited functionality")
     
@@ -394,13 +390,13 @@ class TradeAnalysisService:
             espn_id = player.get("espn_id")
             nba_id = player.get("player_id")  # Sleeper's NBA player ID
             
-            # Fetch stats via MCP
+            # Fetch stats
             try:
-                stats_summary = await self._calculate_roster_stats_via_mcp(
+                stats_summary = await self._calculate_roster_stats(
                     player_name=full_name,
                     player_id=nba_id or espn_id
                 )
-                upcoming_games = await self._get_upcoming_games_count_via_mcp(team)
+                upcoming_games = await self._get_upcoming_games_count(team)
             except Exception as e:
                 logger.warning(f"Could not fetch stats for {full_name}: {e}")
                 stats_summary = "*Stats unavailable*"
@@ -433,14 +429,13 @@ class TradeAnalysisService:
         
         return "\n".join(lines)
     
-    async def _calculate_roster_stats_via_mcp(
+    async def _calculate_roster_stats(
         self,
         player_name: str,
         player_id: Optional[str] = None
     ) -> str:
         """
-        Calculate player season averages using available NBA services.
-        Uses NBA MCP if available, otherwise falls back to nba_stats_service.
+        Calculate player season averages using NBA stats service.
         
         Args:
             player_name: Player full name
@@ -450,23 +445,7 @@ class TradeAnalysisService:
             Formatted stats string (e.g., "25.3 PPG, 5.2 RPG, 4.8 APG")
         """
         try:
-            # Try NBA MCP first if available
-            if self.nba_mcp_service:
-                player_stats = await self.nba_mcp_service.get_player_stats(
-                    player_name=player_name,
-                    season=settings.NBA_CURRENT_SEASON
-                )
-                
-                if player_stats:
-                    ppg = player_stats.get("PTS", 0.0)
-                    rpg = player_stats.get("REB", 0.0)
-                    apg = player_stats.get("AST", 0.0)
-                    fg_pct = player_stats.get("FG_PCT", 0.0)
-                    fg3_pct = player_stats.get("FG3_PCT", 0.0)
-                    
-                    return f"**Season Averages:** {ppg} PPG, {rpg} RPG, {apg} APG, {fg_pct*100:.1f}% FG, {fg3_pct*100:.1f}% 3PT"
-            
-            # Fallback to nba_stats_service if available
+            # Use nba_stats_service if available
             if self.nba_stats_service:
                 # Get player career stats from nba_stats_service
                 # This returns per-game averages for the current season
@@ -488,10 +467,9 @@ class TradeAnalysisService:
             logger.warning(f"Could not calculate stats for {player_name}: {e}")
             return "*Stats unavailable*"
     
-    async def _get_upcoming_games_count_via_mcp(self, team_abbr: str) -> int:
+    async def _get_upcoming_games_count(self, team_abbr: str) -> int:
         """
-        Get count of upcoming games in next 7 days using available services.
-        Uses NBA MCP if available, otherwise falls back to nba_cache_service.
+        Get count of upcoming games in next 7 days using NBA cache service.
         
         Args:
             team_abbr: Team abbreviation (e.g., "LAL")

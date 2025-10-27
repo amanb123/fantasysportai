@@ -112,8 +112,6 @@ class Settings(BaseSettings):
     
     # NBA Stats Integration Configuration
     nba_stats_enabled: bool = Field(default=True, description="Enable/disable NBA stats integration")
-    nba_mcp_enabled: bool = Field(default=True, description="Use MCP server for NBA data instead of direct API")
-    nba_mcp_server_path: str = Field(default="", description="Path to nba_server.py from obinopaul/nba-mcp-server")
     nba_cdn_base_url: str = Field(default="https://cdn.nba.com/static/json", description="NBA CDN base URL for schedule data")
     NBA_CDN_BASE_URL: str = Field(default="https://cdn.nba.com/static/json", description="NBA CDN base URL for schedule data")
     nba_cdn_timeout: int = Field(default=10, description="Timeout for NBA CDN requests in seconds")

@@ -10,7 +10,6 @@ import re
 from backend.config import settings
 
 if TYPE_CHECKING:
-    from backend.services.nba_mcp_service import NBAMCPService
     from backend.services.roster_ranking_service import RosterRankingService
 from backend.services.player_cache_service import PlayerCacheService
 from backend.services.league_data_cache_service import LeagueDataCacheService
@@ -31,7 +30,6 @@ class RosterContextBuilder:
         nba_cache_service: NBACacheService,
         nba_stats_service: Optional[NBAStatsService],
         basketball_repository: BasketballRepository,
-        nba_mcp_service: Optional['NBAMCPService'] = None,
         roster_ranking_service: Optional['RosterRankingService'] = None
     ):
         """
@@ -39,7 +37,6 @@ class RosterContextBuilder:
         
         Args:
             nba_stats_service: Optional NBAStatsService. If None, historical stats will be disabled.
-            nba_mcp_service: Optional NBAMCPService for NBA data via MCP server.
             roster_ranking_service: Optional RosterRankingService for league rankings.
         """
         self.player_cache = player_cache_service
@@ -47,7 +44,6 @@ class RosterContextBuilder:
         self.nba_cache = nba_cache_service
         self.nba_stats = nba_stats_service  # Can be None for graceful degradation
         self.repository = basketball_repository
-        self.nba_mcp = nba_mcp_service  # Can be None, will use database fallback
         self.roster_ranking = roster_ranking_service  # Can be None for graceful degradation
         
         # Load configuration
