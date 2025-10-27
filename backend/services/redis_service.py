@@ -6,12 +6,21 @@ import json
 import logging
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
+from datetime import date, datetime
 import redis
 from redis.connection import ConnectionPool
 
 from backend.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder for datetime and date objects."""
+    def default(self, obj):
+        if isinstance(obj, (date, datetime)):
+            return obj.isoformat()
+        return super().default(obj)
 
 
 class RedisService:
@@ -210,7 +219,7 @@ class RedisService:
             True if successful, False otherwise
         """
         try:
-            json_str = json.dumps(data, separators=(',', ':'))
+            json_str = json.dumps(data, cls=DateTimeEncoder, separators=(',', ':'))
             return self.set(key, json_str, ttl)
         except (TypeError, ValueError) as e:
             logger.error(f"JSON serialization error for key {key}: {e}")
