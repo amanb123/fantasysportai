@@ -253,10 +253,12 @@ if not settings.cors_origins or settings.cors_origins == "http://localhost:3000,
 logger.info(f"CORS Origins: {cors_origins}")
 
 # Add CORS middleware
+# Note: allow_credentials=True cannot be used with allow_origins=["*"]
+# So we disable credentials when using wildcard
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
+    allow_credentials=(cors_origins != ["*"]),  # Only allow credentials if not using wildcard
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
     expose_headers=["*"],
