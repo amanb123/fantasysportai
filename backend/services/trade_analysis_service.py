@@ -1,8 +1,9 @@
 """
 Trade Analysis Service
 
-Orchestrates trade evaluation using LLM agents + NBA MCP server data.
+Orchestrates trade evaluation using LLM agents + NBA data.
 Builds comprehensive context for AI trade analysis.
+Works with or without NBA MCP - uses nba_stats_service as fallback.
 """
 
 import logging
@@ -11,7 +12,6 @@ from datetime import datetime, timedelta
 import json
 
 from backend.agents.agent_factory import AgentFactory
-from backend.services.nba_mcp_service import NBAMCPService
 from backend.services.sleeper_service import SleeperService
 from backend.config import settings
 
@@ -25,14 +25,26 @@ class TradeAnalysisService:
     def __init__(
         self,
         agent_factory: AgentFactory,
-        nba_mcp_service: NBAMCPService,
         sleeper_service: SleeperService,
-        nba_news_service=None
+        nba_news_service=None,
+        nba_mcp_service=None,  # Optional - for enhanced features
+        nba_stats_service=None,  # Fallback when MCP unavailable
+        nba_cache_service=None   # For schedule data
     ):
         self.agent_factory = agent_factory
         self.nba_mcp_service = nba_mcp_service
+        self.nba_stats_service = nba_stats_service
+        self.nba_cache_service = nba_cache_service
         self.sleeper_service = sleeper_service
         self.nba_news_service = nba_news_service
+        
+        # Log which services are available
+        if nba_mcp_service:
+            logger.info("TradeAnalysisService: Using NBA MCP for enhanced features")
+        elif nba_stats_service:
+            logger.info("TradeAnalysisService: Using NBA Stats API (MCP unavailable)")
+        else:
+            logger.warning("TradeAnalysisService: No NBA data services available - limited functionality")
     
     async def analyze_trade(
         self,
@@ -427,7 +439,8 @@ class TradeAnalysisService:
         player_id: Optional[str] = None
     ) -> str:
         """
-        Calculate player season averages using NBA MCP server.
+        Calculate player season averages using available NBA services.
+        Uses NBA MCP if available, otherwise falls back to nba_stats_service.
         
         Args:
             player_name: Player full name
@@ -437,24 +450,39 @@ class TradeAnalysisService:
             Formatted stats string (e.g., "25.3 PPG, 5.2 RPG, 4.8 APG")
         """
         try:
-            # Use NBA MCP to fetch player stats for current season
-            player_stats = await self.nba_mcp_service.get_player_stats(
-                player_name=player_name,
-                season=settings.NBA_CURRENT_SEASON
-            )
+            # Try NBA MCP first if available
+            if self.nba_mcp_service:
+                player_stats = await self.nba_mcp_service.get_player_stats(
+                    player_name=player_name,
+                    season=settings.NBA_CURRENT_SEASON
+                )
+                
+                if player_stats:
+                    ppg = player_stats.get("PTS", 0.0)
+                    rpg = player_stats.get("REB", 0.0)
+                    apg = player_stats.get("AST", 0.0)
+                    fg_pct = player_stats.get("FG_PCT", 0.0)
+                    fg3_pct = player_stats.get("FG3_PCT", 0.0)
+                    
+                    return f"**Season Averages:** {ppg} PPG, {rpg} RPG, {apg} APG, {fg_pct*100:.1f}% FG, {fg3_pct*100:.1f}% 3PT"
             
-            # Extract current season stats
-            if not player_stats:
-                return "*No stats available*"
+            # Fallback to nba_stats_service if available
+            if self.nba_stats_service:
+                # Get player career stats from nba_stats_service
+                # This returns per-game averages for the current season
+                stats = await self.nba_stats_service.get_player_career_stats(player_name)
+                
+                if stats and len(stats) > 0:
+                    # Get most recent season (first in list)
+                    recent_season = stats[0]
+                    ppg = recent_season.get("PTS", 0.0)
+                    rpg = recent_season.get("REB", 0.0)
+                    apg = recent_season.get("AST", 0.0)
+                    fg_pct = recent_season.get("FG_PCT", 0.0)
+                    
+                    return f"**Season Averages:** {ppg:.1f} PPG, {rpg:.1f} RPG, {apg:.1f} APG, {fg_pct*100:.1f}% FG"
             
-            # The stats should contain averages
-            ppg = player_stats.get("PTS", 0.0)
-            rpg = player_stats.get("REB", 0.0)
-            apg = player_stats.get("AST", 0.0)
-            fg_pct = player_stats.get("FG_PCT", 0.0)
-            fg3_pct = player_stats.get("FG3_PCT", 0.0)
-            
-            return f"**Season Averages:** {ppg} PPG, {rpg} RPG, {apg} APG, {fg_pct*100:.1f}% FG, {fg3_pct*100:.1f}% 3PT"
+            return "*No stats available*"
             
         except Exception as e:
             logger.warning(f"Could not calculate stats for {player_name}: {e}")
@@ -462,7 +490,8 @@ class TradeAnalysisService:
     
     async def _get_upcoming_games_count_via_mcp(self, team_abbr: str) -> int:
         """
-        Get count of upcoming games in next 7 days using schedule cache.
+        Get count of upcoming games in next 7 days using available services.
+        Uses NBA MCP if available, otherwise falls back to nba_cache_service.
         
         Args:
             team_abbr: Team abbreviation (e.g., "LAL")
@@ -474,26 +503,63 @@ class TradeAnalysisService:
             if not team_abbr or team_abbr == "FA":
                 return 0
             
-            # Get games for next 7 days
             today = datetime.now().date()
             end_date = today + timedelta(days=7)
             
-            # Pass date objects, not strings
-            schedule = await self.nba_mcp_service.get_schedule_for_date_range(
-                start_date=today,
-                end_date=end_date
-            )
+            # Try NBA MCP first if available
+            if self.nba_mcp_service:
+                schedule = await self.nba_mcp_service.get_schedule_for_date_range(
+                    start_date=today,
+                    end_date=end_date
+                )
+                
+                # Count games for this team
+                team_games = [
+                    game for game in schedule
+                    if game.get("HOME_TEAM_ABBREVIATION") == team_abbr
+                    or game.get("VISITOR_TEAM_ABBREVIATION") == team_abbr
+                    or game.get("home_team_tricode") == team_abbr
+                    or game.get("away_team_tricode") == team_abbr
+                ]
+                
+                return len(team_games)
             
-            # Count games for this team - check both field name variations
-            team_games = [
-                game for game in schedule
-                if game.get("HOME_TEAM_ABBREVIATION") == team_abbr
-                or game.get("VISITOR_TEAM_ABBREVIATION") == team_abbr
-                or game.get("home_team_tricode") == team_abbr
-                or game.get("away_team_tricode") == team_abbr
-            ]
+            # Fallback to nba_cache_service if available
+            if self.nba_cache_service:
+                # Get all games for current season
+                schedule = await self.nba_cache_service.get_full_season_schedule()
+                
+                # Filter for upcoming games in next 7 days for this team
+                team_games = []
+                for game in schedule:
+                    game_date_str = game.get("GAME_DATE_EST") or game.get("game_date")
+                    if not game_date_str:
+                        continue
+                    
+                    # Parse game date
+                    try:
+                        if isinstance(game_date_str, str):
+                            game_date = datetime.strptime(game_date_str.split('T')[0], "%Y-%m-%d").date()
+                        else:
+                            game_date = game_date_str
+                        
+                        # Check if game is in next 7 days
+                        if today <= game_date <= end_date:
+                            # Check if this team is playing
+                            home_team = game.get("HOME_TEAM_ABBREVIATION") or game.get("home_team_tricode") or ""
+                            away_team = game.get("VISITOR_TEAM_ABBREVIATION") or game.get("away_team_tricode") or ""
+                            
+                            if team_abbr in (home_team, away_team):
+                                team_games.append(game)
+                    except Exception as parse_err:
+                        logger.debug(f"Could not parse game date {game_date_str}: {parse_err}")
+                        continue
+                
+                return len(team_games)
             
-            return len(team_games)
+            # No services available
+            logger.warning(f"No NBA schedule services available for {team_abbr}")
+            return 0
             
         except Exception as e:
             logger.warning(f"Could not get schedule for {team_abbr}: {e}")

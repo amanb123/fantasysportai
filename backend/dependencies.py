@@ -385,27 +385,38 @@ def get_trade_analysis_service():
             from backend.services.trade_analysis_service import TradeAnalysisService
             from backend.agents.agent_factory import AgentFactory
             
-            # Get required dependencies
-            nba_mcp = get_nba_mcp_service()
-            if nba_mcp is None:
-                logger.warning("Cannot create TradeAnalysisService: NBA MCP unavailable")
-                return None
-            
+            # Get services (NBA MCP is optional)
             sleeper = get_sleeper_service()
             agent_factory = AgentFactory()
-            nba_news = get_nba_news_service()  # Get NBA news service for injury/player updates
+            nba_news = get_nba_news_service()
+            nba_mcp = get_nba_mcp_service()  # Optional
+            nba_stats = get_nba_stats_service()  # Fallback
+            nba_cache = get_nba_cache_service()  # For schedules
+            
+            # Check critical dependencies
+            if not sleeper:
+                logger.warning("Cannot create TradeAnalysisService: Sleeper service unavailable")
+                return None
+            
+            # At least one NBA data source is recommended
+            if not (nba_mcp or nba_stats):
+                logger.warning("TradeAnalysisService: No NBA data services available - limited functionality")
             
             _trade_analysis_service = TradeAnalysisService(
                 agent_factory=agent_factory,
-                nba_mcp_service=nba_mcp,
                 sleeper_service=sleeper,
-                nba_news_service=nba_news
+                nba_news_service=nba_news,
+                nba_mcp_service=nba_mcp,  # Can be None
+                nba_stats_service=nba_stats,  # Can be None
+                nba_cache_service=nba_cache  # Can be None
             )
             
             logger.info("Trade Analysis service initialized")
             
         except Exception as e:
             logger.error(f"Failed to create Trade Analysis service: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
     
     return _trade_analysis_service
