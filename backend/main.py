@@ -243,13 +243,24 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Determine CORS origins
+cors_origins = settings.cors_origins_list
+# If CORS_ORIGINS env var is not set or empty, allow all origins (for initial setup)
+if not settings.cors_origins or settings.cors_origins == "http://localhost:3000,http://localhost:3001,http://localhost:5173":
+    logger.warning("CORS_ORIGINS not configured - allowing all origins. Set CORS_ORIGINS in production!")
+    cors_origins = ["*"]
+
+logger.info(f"CORS Origins: {cors_origins}")
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 
