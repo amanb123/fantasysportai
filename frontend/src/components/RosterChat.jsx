@@ -190,6 +190,49 @@ const RosterChat = () => {
     }
   }
 
+  // Handle quick action button clicks
+  const handleQuickAction = async (message) => {
+    if (loading) return
+    
+    setInputMessage(message)
+    setLoading(true)
+    
+    // Add user message optimistically
+    const userMessage = {
+      role: 'user',
+      content: message,
+      timestamp: new Date().toISOString()
+    }
+    setMessages(prev => [...prev, userMessage])
+    
+    try {
+      // Send message to API
+      const response = await sendChatMessage(sessionId, message)
+      
+      // Response comes via WebSocket, but add fallback
+      if (!wsConnected) {
+        setMessages(prev => [...prev, {
+          role: response.role,
+          content: response.content,
+          timestamp: response.timestamp,
+          metadata: response.metadata
+        }])
+      }
+      
+      // Clear input after successful send
+      setInputMessage('')
+      
+    } catch (err) {
+      console.error('Error sending message:', err)
+      // Remove optimistic message on error
+      setMessages(prev => prev.filter(msg => msg !== userMessage))
+      setError(err.message || 'Failed to send message')
+      // Keep the message in input on error
+    } finally {
+      setLoading(false)
+    }
+  }
+
   if (isInitializing) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -329,13 +372,13 @@ const RosterChat = () => {
             <div className="flex items-center space-x-2 overflow-x-auto pb-1">
               <span className="text-xs font-medium text-gray-600 whitespace-nowrap">Quick Actions:</span>
               <button
-                onClick={() => setInputMessage('Show me the best available free agents')}
+                onClick={() => handleQuickAction('Show me the best available free agents')}
                 className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors whitespace-nowrap"
               >
                 🔍 Find Free Agents
               </button>
               <button
-                onClick={() => setInputMessage('What players should I start this week?')}
+                onClick={() => handleQuickAction('What players should I start this week?')}
                 className="px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors whitespace-nowrap"
               >
                 ⭐ Lineup Advice

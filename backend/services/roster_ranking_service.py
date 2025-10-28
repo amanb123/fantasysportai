@@ -49,6 +49,12 @@ class RosterRankingService:
             logger.info(f"Using scoring settings with {len(scoring_settings)} categories for league {league_id}")
         
         rosters = await self.sleeper_service.get_league_rosters(league_id)
+        if not rosters:
+            logger.error(f"No rosters found for league {league_id}")
+            raise ValueError(f"No rosters found for league {league_id}")
+        
+        logger.info(f"Found {len(rosters)} rosters for league {league_id}")
+        
         users_list = await self.sleeper_service.get_league_users(league_id)
         # Convert users list to dictionary mapping user_id -> display_name
         users = {}
@@ -58,9 +64,15 @@ class RosterRankingService:
                 display_name = user.get('display_name') or user.get('username') or f"User {user_id}"
                 users[user_id] = display_name
         
+        logger.info(f"Found {len(users)} users for league {league_id}")
+        
         # Get all player data for detailed info
         all_players = await self.sleeper_service.get_all_players()
-        all_players = await self.sleeper_service.get_all_players()
+        if not all_players:
+            logger.error("Failed to fetch player data from Sleeper")
+            raise ValueError("Failed to fetch player data from Sleeper")
+        
+        logger.info(f"Loaded {len(all_players)} players from Sleeper")
         league_details = self.league_cache_service.get_cached_league_details(league_id) or {}
         league_name = league_details.get('name', f'League {league_id}')
         rankings = []
@@ -109,9 +121,15 @@ class RosterRankingService:
         for pid in player_ids:
             player = all_players.get(pid)
             if not player:
+                logger.debug(f"Player {pid} not found in all_players dict, skipping")
+                excluded_players.append({
+                    'name': f'Unknown Player ({pid})',
+                    'status': 'unknown',
+                    'reason': 'Not found in player database'
+                })
                 continue
             
-            player_name = player.get('full_name') or player.get('name')
+            player_name = player.get('full_name') or player.get('name') or f'Player {pid}'
             status = (player.get('injury_status') or '').lower()
             
             # Exclude injured/out players
@@ -124,7 +142,12 @@ class RosterRankingService:
                 continue
             
             # Get player stats using NBA Stats API (same logic as matchup simulation)
-            stats = await self._get_player_season_stats(player, player_name)
+            try:
+                stats = await self._get_player_season_stats(player, player_name)
+            except Exception as e:
+                logger.warning(f"Exception getting stats for {player_name}: {e}")
+                stats = None
+                
             if not stats:
                 logger.debug(f"No stats returned for player: {player_name}")
                 excluded_players.append({
@@ -142,11 +165,17 @@ class RosterRankingService:
                 self._logged_sample_stats = True
             
             cat_scores = self._calculate_fantasy_points_per_category(stats, scoring_settings)
+            
+            # Multiply by ACTUAL games played this season to get total production
+            games_played = stats.get('actual_games_played', stats.get('games', 0))
+            if games_played > 0:
+                cat_scores = {k: v * games_played for k, v in cat_scores.items()}
+            
             player_total = sum(cat_scores.values())
             
             # Log calculation for first player
             if not hasattr(self, '_logged_sample_calc'):
-                logger.info(f"Sample calculation for {player_name}: cat_scores={cat_scores}, total={player_total}")
+                logger.info(f"Sample calculation for {player_name}: cat_scores={cat_scores}, games={games_played}, total={player_total}")
                 self._logged_sample_calc = True
             
             # Add to category totals
@@ -161,8 +190,8 @@ class RosterRankingService:
                 'team': player.get('team', 'N/A'),
                 'total_points': round(player_total, 2),
                 'category_contributions': {k: round(v, 2) for k, v in cat_scores.items() if abs(v) > 0.01},
-                'games_played': stats.get('games', 0),  # NBA stats uses 'games' not 'games_played'
-                'season': stats.get('season', 'N/A')
+                'games_played': games_played,
+                'season': stats.get('season_used', stats.get('season', 'N/A'))
             })
         
         logger.info(f"Processed {active_players}/{len(player_ids)} active players for roster {roster.get('roster_id')}")
@@ -222,28 +251,54 @@ class RosterRankingService:
                 elif self.last_season in season_id:
                     last_season_stats = season_stats
             
-            # Use ONLY current season (2025-26) - no fallback to previous seasons
-            # Players who haven't played yet will have empty stats (all zeros)
+            # ALWAYS use current season games for the calculation (actual production this year)
+            # But use per-game stats from last season if current season sample is too small
             selected_stats = None
             season_used = None
+            actual_games_played = 0  # Games played THIS season (for total calculation)
             
-            if current_season_stats:
-                # Use current season stats even if games = 0
+            if current_season_stats and current_season_stats.get("games", 0) >= self.min_games_threshold:
+                # Enough games in current season to use it for both per-game and total
                 selected_stats = current_season_stats
+                actual_games_played = current_season_stats.get("games", 0)
                 season_used = self.current_season
-            else:
-                # No current season data at all - create empty stats
-                selected_stats = {
-                    "season": self.current_season,
-                    "games": 0,
-                    "ppg": 0, "rpg": 0, "apg": 0, "spg": 0, "bpg": 0,
-                    "tov": 0, "fgm": 0, "fga": 0, "ftm": 0, "fta": 0,
-                    "fg3m": 0, "fg3a": 0, "dreb": 0, "oreb": 0, "pf": 0
-                }
-                season_used = self.current_season
+                logger.debug(f"{player_name}: Using current season ({actual_games_played} games)")
+            elif current_season_stats and current_season_stats.get("games", 0) > 0:
+                # Use current season games for total, but last season per-game rates
+                actual_games_played = current_season_stats.get("games", 0)
+                if last_season_stats and last_season_stats.get("games", 0) > 0:
+                    selected_stats = last_season_stats  # Per-game rates from last season
+                    season_used = f"{self.last_season} (rates) × {actual_games_played} games"
+                    logger.debug(f"{player_name}: Using last season rates × {actual_games_played} current games")
+                else:
+                    # No last season data, use current season even if small sample
+                    selected_stats = current_season_stats
+                    season_used = self.current_season
+                    logger.debug(f"{player_name}: Using current season only ({actual_games_played} games)")
+            elif last_season_stats and last_season_stats.get("games", 0) > 0:
+                # No current season data at all, use last season
+                selected_stats = last_season_stats
+                actual_games_played = last_season_stats.get("games", 0)
+                season_used = self.last_season
+                logger.debug(f"{player_name}: Using last season ({actual_games_played} games)")
+            elif most_recent_stats:
+                # Use most recent season with data as last resort
+                selected_stats = most_recent_stats
+                actual_games_played = most_recent_stats.get("games", 0)
+                season_used = most_recent_stats.get("season", "recent")
+                logger.debug(f"{player_name}: Using most recent season {season_used} ({actual_games_played} games)")
             
-            logger.info(f"{player_name}: Using {season_used} season ({selected_stats.get('games', 0)} games)")
-            return selected_stats
+            if not selected_stats:
+                logger.debug(f"{player_name}: No usable season stats")
+                return None
+            
+            # Add actual_games_played to the return value for use in total calculation
+            result = dict(selected_stats)
+            result['actual_games_played'] = actual_games_played
+            result['season_used'] = season_used
+            
+            logger.info(f"{player_name}: Using {season_used} ({actual_games_played} games)")
+            return result
             
         except Exception as e:
             logger.warning(f"Error getting stats for {player_name}: {e}")
