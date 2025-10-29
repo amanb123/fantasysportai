@@ -3,15 +3,64 @@ import { getRosterRankings } from '../services/api';
 import LoadingSpinner from './LoadingSpinner';
 import ErrorMessage from './ErrorMessage';
 
-const RosterRankingDashboard = ({ leagueId }) => {
+const RosterRankingDashboard = ({ leagueId, hideHeader = false, onDataLoad }) => {
   const [rankings, setRankings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [hoveredPlayer, setHoveredPlayer] = useState(null);
 
   useEffect(() => {
+    let timeoutId = null;
+    let isCancelled = false;
+    
+    const loadRankings = async () => {
+      if (!leagueId) {
+        setError('No league ID provided');
+        setLoading(false);
+        return;
+      }
+      
+      try {
+        setLoading(true);
+        setError(null);
+        
+        // Add timeout to prevent infinite loading
+        timeoutId = setTimeout(() => {
+          if (!isCancelled) {
+            setError('Request timed out. The roster ranking service may be unavailable or taking too long.');
+            setLoading(false);
+          }
+        }, 30000); // 30 second timeout
+        
+        const data = await getRosterRankings(leagueId);
+        
+        if (!isCancelled) {
+          clearTimeout(timeoutId);
+          setRankings(data);
+          if (onDataLoad) {
+            onDataLoad(data);
+          }
+          setLoading(false);
+        }
+      } catch (err) {
+        if (!isCancelled) {
+          clearTimeout(timeoutId);
+          console.error('Failed to load rankings:', err);
+          setError(err.message || 'Failed to load roster rankings');
+          setLoading(false);
+        }
+      }
+    };
+    
     loadRankings();
-  }, [leagueId]);
+    
+    return () => {
+      isCancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [leagueId, onDataLoad]);
 
   const loadRankings = async () => {
     try {
@@ -19,6 +68,9 @@ const RosterRankingDashboard = ({ leagueId }) => {
       setError(null);
       const data = await getRosterRankings(leagueId);
       setRankings(data);
+      if (onDataLoad) {
+        onDataLoad(data);
+      }
     } catch (err) {
       console.error('Failed to load rankings:', err);
       setError(err.message || 'Failed to load roster rankings');
@@ -63,11 +115,11 @@ const RosterRankingDashboard = ({ leagueId }) => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-start">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">🏆 Roster Power Rankings</h2>
+          <h2 className="text-xl font-bold text-gray-900">Power Rankings</h2>
           <p className="text-sm text-gray-600 mt-1">
             {rankings.total_rosters} teams
           </p>
@@ -111,18 +163,44 @@ const RosterRankingDashboard = ({ leagueId }) => {
 
               {/* Stats */}
               <div className="space-y-2 mb-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Total Points:</span>
-                  <span className="text-lg font-bold text-indigo-600">
+                {/* Power Score - Prominently displayed at top */}
+                <div className="text-center mb-2">
+                  <div className="text-xs text-gray-500 mb-1">Power Score</div>
+                  <div className="text-2xl font-bold text-indigo-600">
                     {roster.total_fantasy_points.toFixed(2)}
-                  </span>
+                  </div>
                 </div>
+                
+                {/* Divider */}
+                <div className="border-t border-gray-300 my-2"></div>
+                
+                {/* Base Points */}
                 <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Active Players:</span>
-                  <span className="text-sm font-semibold text-gray-900">
-                    {roster.active_players}
+                  <span className="text-xs text-gray-600">Base Points (Top 9 Players):</span>
+                  <span className="text-sm font-semibold text-gray-700">
+                    {roster.base_fantasy_points?.toFixed(2) || roster.total_fantasy_points.toFixed(2)}
                   </span>
                 </div>
+                
+                {/* Win Bonus */}
+                {roster.wins > 0 && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-green-600">Win Bonus ({roster.wins}W × 10%):</span>
+                    <span className="text-sm font-semibold text-green-600">
+                      +{roster.win_bonus?.toFixed(2) || '0.00'}
+                    </span>
+                  </div>
+                )}
+                
+                {/* Loss Penalty */}
+                {roster.losses > 0 && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-red-600">Loss Penalty ({roster.losses}L × 5%):</span>
+                    <span className="text-sm font-semibold text-red-600">
+                      -{roster.loss_penalty?.toFixed(2) || '0.00'}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Player Breakdown - Hover Area */}
@@ -158,8 +236,7 @@ const RosterRankingDashboard = ({ leagueId }) => {
                               <span>Games Played:</span>
                               <span className="font-semibold">{player.games_played}</span>
                             </div>
-                            <div className="flex justify-between">
-                              <span>Season:</span>
+                            <div>
                               <span className="font-semibold">{player.season}</span>
                             </div>
                             <div className="border-t border-gray-700 pt-2 mt-2">

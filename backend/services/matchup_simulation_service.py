@@ -377,18 +377,24 @@ class MatchupSimulationService:
             start = start_date.date() if isinstance(start_date, datetime) else start_date
             end = end_date.date() if isinstance(end_date, datetime) else end_date
             
-            schedule = await self.nba_mcp_service.get_schedule_for_date_range(
-                start_date=start,
-                end_date=end
-            )
+            # Fetch season schedule and filter by date range
+            # Determine season year from start date
+            if start.month >= 10:  # Oct-Dec
+                season = str(start.year)
+            else:  # Jan-Sep
+                season = str(start.year - 1)
             
-            # Check both field name variations
+            schedule = await self.nba_stats_service.fetch_season_schedule(season=season)
+            
+            if not schedule:
+                logger.debug(f"{full_name} ({team}): Could not fetch schedule")
+                return 0.0
+            
+            # Filter games by date range and team
             team_games = [
                 game for game in schedule
-                if game.get("HOME_TEAM_ABBREVIATION") == team
-                or game.get("VISITOR_TEAM_ABBREVIATION") == team
-                or game.get("home_team_tricode") == team
-                or game.get("away_team_tricode") == team
+                if game.get("game_date") and start <= game.get("game_date") <= end
+                and (game.get("home_team_tricode") == team or game.get("away_team_tricode") == team)
             ]
             
             num_games = len(team_games)

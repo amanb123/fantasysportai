@@ -49,6 +49,12 @@ class RosterRankingService:
             logger.info(f"Using scoring settings with {len(scoring_settings)} categories for league {league_id}")
         
         rosters = await self.sleeper_service.get_league_rosters(league_id)
+        if not rosters:
+            logger.error(f"No rosters found for league {league_id}")
+            raise ValueError(f"No rosters found for league {league_id}")
+        
+        logger.info(f"Found {len(rosters)} rosters for league {league_id}")
+        
         users_list = await self.sleeper_service.get_league_users(league_id)
         # Convert users list to dictionary mapping user_id -> display_name
         users = {}
@@ -58,28 +64,50 @@ class RosterRankingService:
                 display_name = user.get('display_name') or user.get('username') or f"User {user_id}"
                 users[user_id] = display_name
         
+        logger.info(f"Found {len(users)} users for league {league_id}")
+        
         # Get all player data for detailed info
         all_players = await self.sleeper_service.get_all_players()
-        all_players = await self.sleeper_service.get_all_players()
+        if not all_players:
+            logger.error("Failed to fetch player data from Sleeper")
+            raise ValueError("Failed to fetch player data from Sleeper")
+        
+        logger.info(f"Loaded {len(all_players)} players from Sleeper")
         league_details = self.league_cache_service.get_cached_league_details(league_id) or {}
         league_name = league_details.get('name', f'League {league_id}')
+        
+        # Win/Loss multiplier constants
+        WIN_BONUS = 0.10  # 10% bonus per win
+        LOSS_PENALTY = 0.05  # 5% penalty per loss
+        
         rankings = []
         for roster in rosters:
             stats = await self._calculate_roster_stats(roster, all_players, scoring_settings)
+            wins = roster.get('settings', {}).get('wins', 0)
+            losses = roster.get('settings', {}).get('losses', 0)
+            base_points = stats['total_fantasy_points']
+            
+            # Calculate multiplier: (1 + 0.10 * wins - 0.05 * losses)
+            win_multiplier = 1 + (WIN_BONUS * wins) - (LOSS_PENALTY * losses)
+            adjusted_points = base_points * win_multiplier
+            
             rankings.append({
                 'roster_id': roster['roster_id'],
                 'owner_id': roster.get('owner_id'),
                 'owner_name': users.get(roster.get('owner_id'), f"Team {roster['roster_id']}"),
-                'total_fantasy_points': stats['total_fantasy_points'],
-                'wins': roster.get('settings', {}).get('wins', 0),
-                'losses': roster.get('settings', {}).get('losses', 0),
+                'base_fantasy_points': base_points,  # Points before win/loss adjustment
+                'total_fantasy_points': adjusted_points,  # Final adjusted points
+                'wins': wins,
+                'losses': losses,
+                'win_multiplier': win_multiplier,
+                'win_bonus': base_points * WIN_BONUS * wins if wins > 0 else 0,
+                'loss_penalty': base_points * LOSS_PENALTY * losses if losses > 0 else 0,
                 'category_scores': stats['category_scores'],
                 'category_percentiles': {},
                 'player_breakdown': stats.get('player_breakdown', []),  # Detailed per-player contributions
-                'active_players': stats.get('active_players', 0),
                 'excluded_players': stats.get('excluded_players', [])  # Players excluded due to injury
             })
-        # Sort and rank
+        # Sort and rank by adjusted points
         rankings.sort(key=lambda r: r['total_fantasy_points'], reverse=True)
         for i, r in enumerate(rankings):
             r['rank'] = i + 1
@@ -109,9 +137,15 @@ class RosterRankingService:
         for pid in player_ids:
             player = all_players.get(pid)
             if not player:
+                logger.debug(f"Player {pid} not found in all_players dict, skipping")
+                excluded_players.append({
+                    'name': f'Unknown Player ({pid})',
+                    'status': 'unknown',
+                    'reason': 'Not found in player database'
+                })
                 continue
             
-            player_name = player.get('full_name') or player.get('name')
+            player_name = player.get('full_name') or player.get('name') or f'Player {pid}'
             status = (player.get('injury_status') or '').lower()
             
             # Exclude injured/out players
@@ -124,7 +158,12 @@ class RosterRankingService:
                 continue
             
             # Get player stats using NBA Stats API (same logic as matchup simulation)
-            stats = await self._get_player_season_stats(player, player_name)
+            try:
+                stats = await self._get_player_season_stats(player, player_name)
+            except Exception as e:
+                logger.warning(f"Exception getting stats for {player_name}: {e}")
+                stats = None
+                
             if not stats:
                 logger.debug(f"No stats returned for player: {player_name}")
                 excluded_players.append({
@@ -142,11 +181,17 @@ class RosterRankingService:
                 self._logged_sample_stats = True
             
             cat_scores = self._calculate_fantasy_points_per_category(stats, scoring_settings)
+            
+            # Multiply by ACTUAL games played this season to get total production
+            games_played = stats.get('actual_games_played', stats.get('games', 0))
+            if games_played > 0:
+                cat_scores = {k: v * games_played for k, v in cat_scores.items()}
+            
             player_total = sum(cat_scores.values())
             
             # Log calculation for first player
             if not hasattr(self, '_logged_sample_calc'):
-                logger.info(f"Sample calculation for {player_name}: cat_scores={cat_scores}, total={player_total}")
+                logger.info(f"Sample calculation for {player_name}: cat_scores={cat_scores}, games={games_played}, total={player_total}")
                 self._logged_sample_calc = True
             
             # Add to category totals
@@ -161,17 +206,28 @@ class RosterRankingService:
                 'team': player.get('team', 'N/A'),
                 'total_points': round(player_total, 2),
                 'category_contributions': {k: round(v, 2) for k, v in cat_scores.items() if abs(v) > 0.01},
-                'games_played': stats.get('games', 0),  # NBA stats uses 'games' not 'games_played'
-                'season': stats.get('season', 'N/A')
+                'games_played': games_played,
+                'season': stats.get('season_used', stats.get('season', 'N/A'))
             })
         
-        logger.info(f"Processed {active_players}/{len(player_ids)} active players for roster {roster.get('roster_id')}")
+        # Sort players by total points and take only top 9 (max active roster spots per week)
+        sorted_players = sorted(player_breakdown, key=lambda x: x['total_points'], reverse=True)
+        top_9_players = sorted_players[:9]
+        
+        # Recalculate totals using only top 9 players
+        total_fantasy_points = sum(p['total_points'] for p in top_9_players)
+        category_scores = {}
+        for player in top_9_players:
+            for cat, val in player['category_contributions'].items():
+                category_scores[cat] = category_scores.get(cat, 0.0) + val
+        
+        logger.info(f"Processed {active_players}/{len(player_ids)} active players for roster {roster.get('roster_id')}, using top 9 for scoring")
         return {
             'total_fantasy_points': total_fantasy_points,
             'category_scores': category_scores,
             'player_count': active_players,
-            'player_breakdown': sorted(player_breakdown, key=lambda x: x['total_points'], reverse=True),
-            'active_players': active_players,
+            'player_breakdown': sorted_players,  # Show all players but mark top 9
+            'active_players': len(top_9_players),
             'excluded_players': excluded_players
         }
     
@@ -199,10 +255,8 @@ class RosterRankingService:
             
             regular_season = career_stats["regular_season"]
             
-            # Find appropriate season stats
+            # Find current season (2025-2026) stats only
             current_season_stats = None
-            last_season_stats = None
-            most_recent_stats = None
             
             # Log available seasons for debugging
             available_seasons = [(s.get("season", ""), s.get("games", 0)) for s in regular_season if s.get("games", 0) > 0]
@@ -212,38 +266,33 @@ class RosterRankingService:
                 season_id = season_stats.get("season", "")
                 gp = season_stats.get("games", 0)
                 
-                # Track most recent season with games
-                if not most_recent_stats or season_id > most_recent_stats.get("season", ""):
-                    if gp > 0:
-                        most_recent_stats = season_stats
-                
-                if self.current_season in season_id:
+                if self.current_season in season_id and gp > 0:
                     current_season_stats = season_stats
-                elif self.last_season in season_id:
-                    last_season_stats = season_stats
+                    break
             
-            # Use ONLY current season (2025-26) - no fallback to previous seasons
-            # Players who haven't played yet will have empty stats (all zeros)
+            # ONLY use 2025-2026 season stats
             selected_stats = None
-            season_used = None
+            season_used = "Calculated with 2025-2026 season avgs"
+            actual_games_played = 0
             
-            if current_season_stats:
-                # Use current season stats even if games = 0
+            if current_season_stats and current_season_stats.get("games", 0) > 0:
                 selected_stats = current_season_stats
-                season_used = self.current_season
+                actual_games_played = current_season_stats.get("games", 0)
+                logger.debug(f"{player_name}: Using current season ({actual_games_played} games)")
             else:
-                # No current season data at all - create empty stats
-                selected_stats = {
-                    "season": self.current_season,
-                    "games": 0,
-                    "ppg": 0, "rpg": 0, "apg": 0, "spg": 0, "bpg": 0,
-                    "tov": 0, "fgm": 0, "fga": 0, "ftm": 0, "fta": 0,
-                    "fg3m": 0, "fg3a": 0, "dreb": 0, "oreb": 0, "pf": 0
-                }
-                season_used = self.current_season
+                logger.debug(f"{player_name}: No 2025-2026 season data available")
             
-            logger.info(f"{player_name}: Using {season_used} season ({selected_stats.get('games', 0)} games)")
-            return selected_stats
+            if not selected_stats:
+                logger.debug(f"{player_name}: No usable season stats")
+                return None
+            
+            # Add actual_games_played to the return value for use in total calculation
+            result = dict(selected_stats)
+            result['actual_games_played'] = actual_games_played
+            result['season_used'] = season_used
+            
+            logger.info(f"{player_name}: Using {season_used} ({actual_games_played} games)")
+            return result
             
         except Exception as e:
             logger.warning(f"Error getting stats for {player_name}: {e}")
@@ -363,4 +412,107 @@ class RosterRankingService:
             'cached': bool(cached),
             'ttl_remaining': ttl,
             'last_updated': last_updated
+        }
+
+    def generate_roster_analysis(self, roster_data: Dict, all_rankings: List[Dict]) -> Dict[str, Any]:
+        """
+        Generate AI-powered analysis of a roster's strengths, weaknesses, and outlook.
+        Returns structured analysis with key strengths, weaknesses, and overall assessment.
+        """
+        owner_name = roster_data.get('owner_name', 'Unknown')
+        rank = roster_data.get('rank', 0)
+        total_rosters = len(all_rankings)
+        category_scores = roster_data.get('category_scores', {})
+        category_percentiles = roster_data.get('category_percentiles', {})
+        player_breakdown = roster_data.get('player_breakdown', [])
+        excluded_players = roster_data.get('excluded_players', [])
+        total_points = roster_data.get('total_fantasy_points', 0)
+        
+        # Find top strengths (>80th percentile)
+        strengths = []
+        for cat, percentile in sorted(category_percentiles.items(), key=lambda x: x[1], reverse=True):
+            if percentile >= 80:
+                score = category_scores.get(cat, 0)
+                rank_text = ""
+                if percentile >= 99:
+                    rank_text = " (league best!)"
+                elif percentile >= 95:
+                    rank_text = " (elite!)"
+                elif percentile >= 90:
+                    rank_text = " (top tier)"
+                
+                cat_display = cat.upper() if len(cat) <= 3 else cat.replace('_', ' ').title()
+                strengths.append(f"+{score:.1f} from {cat_display} ({percentile:.1f} percentile{rank_text})")
+        
+        # Find weaknesses (negative scores or <50th percentile)
+        weaknesses = []
+        for cat, score in sorted(category_scores.items(), key=lambda x: x[1]):
+            percentile = category_percentiles.get(cat, 50)
+            if score < 0 or percentile < 50:
+                cat_display = cat.upper() if len(cat) <= 3 else cat.replace('_', ' ').title()
+                if score < 0:
+                    weaknesses.append(f"{score:.1f} from {cat_display} (negative impact)")
+                else:
+                    weaknesses.append(f"+{score:.1f} from {cat_display} ({percentile:.1f} percentile - below average)")
+        
+        # Get top players
+        top_players = sorted(player_breakdown, key=lambda p: p.get('total_points', 0), reverse=True)[:3]
+        top_player_names = [p.get('name', 'Unknown') for p in top_players]
+        
+        # Get injured/out players
+        injured_count = len(excluded_players)
+        injured_names = [p.get('name', 'Unknown') for p in excluded_players[:3]]  # Top 3 injured
+        
+        # Generate analysis text
+        analysis_parts = []
+        
+        # Mention top players and their contribution
+        if top_player_names:
+            top_3_str = ", ".join(top_player_names[:2])
+            if len(top_player_names) > 2:
+                top_3_str += f", and {top_player_names[2]}"
+            analysis_parts.append(f"{owner_name} is led by {top_3_str}")
+        
+        # Mention dominant categories
+        if len(strengths) >= 3:
+            dominant_cats = [s.split(' from ')[1].split(' (')[0] for s in strengths[:2]]
+            analysis_parts.append(f"dominating in {' and '.join(dominant_cats)}")
+        
+        # Mention injury concerns
+        if injured_count > 0:
+            if injured_count == 1:
+                analysis_parts.append(f"Currently dealing with {injured_names[0]} out")
+            elif injured_count <= 3:
+                analysis_parts.append(f"Missing {', '.join(injured_names)}")
+            else:
+                analysis_parts.append(f"Dealing with {injured_count} injuries ({', '.join(injured_names[:2])}, etc.)")
+        
+        # Mention ranking position
+        if rank == 1:
+            analysis_parts.append(f"Currently #1 in the league with elite production")
+        elif rank <= 3:
+            analysis_parts.append(f"Sitting at #{rank} with championship potential")
+        elif rank <= total_rosters // 2:
+            analysis_parts.append(f"Currently #{rank}, firmly in playoff contention")
+        else:
+            analysis_parts.append(f"Ranked #{rank}, needs improvement to make playoffs")
+        
+        # Health/outlook
+        if injured_count >= 3:
+            analysis_parts.append(f"When healthy, this team could jump {min(3, rank - 1)} spots")
+        elif injured_count > 0:
+            analysis_parts.append(f"Health will be key to climbing the rankings")
+        
+        analysis = ". ".join(analysis_parts) + "."
+        
+        return {
+            'owner_name': owner_name,
+            'rank': rank,
+            'total_points': total_points,
+            'strengths': strengths[:5],  # Top 5 strengths
+            'weaknesses': weaknesses[:5],  # Top 5 weaknesses
+            'analysis': analysis,
+            'top_players': top_player_names,
+            'injured_players': injured_names,
+            'injured_count': injured_count
         }

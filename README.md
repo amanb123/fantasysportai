@@ -2,6 +2,18 @@
 
 A FastAPI-based fantasy basketball league management system with Sleeper API integration and AI-powered trade negotiations using AutoGen multi-agent framework.
 
+## 🚀 Live Deployment
+
+- **Production Frontend**: https://fantasysportai.vercel.app
+- **Production Backend**: https://fantasysportai-production.up.railway.app
+- **Staging (Dev)**: https://fantasysportai-git-dev-*.vercel.app
+
+## 📖 Documentation
+
+- **[Development Workflow Guide](docs/DEV_WORKFLOW.md)** - How to develop on `dev` and promote to `main`
+- **[Local Development Guide](docs/LOCAL_DEVELOPMENT.md)** - Setting up local environment
+- **[Deployment Summary](docs/DEPLOYMENT_SUMMARY.md)** - Production deployment details
+
 ## Project Description
 
 The Fantasy Basketball League Manager is an intelligent system that integrates with Sleeper fantasy sports platform to manage fantasy basketball teams, rosters, and trades. Users can access their existing Sleeper leagues and rosters through a simple username-based flow, eliminating the need for traditional authentication. The system uses AI agents to facilitate trade negotiations between teams, ensuring fair and strategic trades while maintaining roster composition rules and salary cap constraints.

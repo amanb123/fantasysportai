@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
+import RosterRankingDashboard from './RosterRankingDashboard'
 import { getSleeperPlayersBulk } from '../services/api'
 
 const CurrentMatchup = ({ leagueId, rosterId, playerDetails: initialPlayerDetails }) => {
@@ -15,6 +16,9 @@ const CurrentMatchup = ({ leagueId, rosterId, playerDetails: initialPlayerDetail
   const [opponentMatchup, setOpponentMatchup] = useState(null)
   const [userRosterData, setUserRosterData] = useState(null)
   const [opponentRosterData, setOpponentRosterData] = useState(null)
+  const [userLineupExpanded, setUserLineupExpanded] = useState(false)
+  const [opponentLineupExpanded, setOpponentLineupExpanded] = useState(false)
+  const [rankings, setRankings] = useState(null)
 
   useEffect(() => {
     const fetchMatchups = async () => {
@@ -126,9 +130,7 @@ const CurrentMatchup = ({ leagueId, rosterId, playerDetails: initialPlayerDetail
 
     const starters = matchup.starters || []
     const allPlayers = rosterData.players || []
-    const points = matchup.points || 0
     const ownerName = getUserName(rosterData.owner_id)
-    const playersPoints = matchup.players_points || {}
     
     // Get wins and losses from roster settings
     const wins = rosterData.settings?.wins || 0
@@ -145,62 +147,50 @@ const CurrentMatchup = ({ leagueId, rosterId, playerDetails: initialPlayerDetail
             {ownerName}
           </h3>
           <div className="text-sm text-gray-600 mt-1">{record}</div>
-          <div className={`text-3xl font-bold mt-2 ${isUser ? 'text-blue-600' : 'text-red-600'}`}>
-            {points.toFixed(2)}
-          </div>
         </div>
 
-        {/* Starters */}
-        {starters.length > 0 && (
-          <div className="mb-4">
-            <h4 className="text-sm font-semibold text-gray-700 mb-2 uppercase">Starting Lineup</h4>
-            <div className="space-y-1">
-              {starters.map((playerId, idx) => {
-                const playerPoints = playersPoints[playerId] || 0
-                return (
+        {/* Player Cards */}
+        <div className="space-y-3">
+          {/* Starters */}
+          {starters.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Starters</h4>
+              <div className="grid grid-cols-3 gap-1.5">
+                {starters.map((playerId, idx) => (
                   <div 
                     key={`starter-${playerId}-${idx}`}
-                    className="flex items-center justify-between bg-white rounded px-3 py-2 text-sm"
+                    className={`${isUser ? 'bg-blue-600' : 'bg-red-600'} text-white rounded px-2 py-1.5 shadow-sm`}
                   >
-                    <div className="flex items-center space-x-2">
-                      <span className="font-medium text-gray-900">{getPlayerName(playerId)}</span>
-                      <span className="text-xs text-gray-500">{getPlayerPosition(playerId)}</span>
+                    <div className="flex flex-col">
+                      <span className="font-medium text-xs truncate">{getPlayerName(playerId)}</span>
+                      <span className="text-[10px] opacity-75">{getPlayerPosition(playerId)}</span>
                     </div>
-                    <span className={`text-xs font-semibold ${isUser ? 'text-blue-600' : 'text-red-600'}`}>
-                      {playerPoints.toFixed(1)}
-                    </span>
                   </div>
-                )
-              })}
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Bench */}
-        {benchPlayers.length > 0 && (
-          <div>
-            <h4 className="text-sm font-semibold text-gray-700 mb-2 uppercase">Bench</h4>
-            <div className="space-y-1">
-              {benchPlayers.map((playerId, idx) => {
-                const playerPoints = playersPoints[playerId] || 0
-                return (
+          {/* Bench */}
+          {benchPlayers.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Bench</h4>
+              <div className="grid grid-cols-3 gap-1.5">
+                {benchPlayers.map((playerId, idx) => (
                   <div 
                     key={`bench-${playerId}-${idx}`}
-                    className="flex items-center justify-between bg-white bg-opacity-60 rounded px-3 py-2 text-sm"
+                    className="bg-gray-300 text-gray-700 rounded px-2 py-1.5 shadow-sm"
                   >
-                    <div className="flex items-center space-x-2">
-                      <span className="text-gray-700">{getPlayerName(playerId)}</span>
-                      <span className="text-xs text-gray-500">{getPlayerPosition(playerId)}</span>
+                    <div className="flex flex-col">
+                      <span className="font-medium text-xs truncate">{getPlayerName(playerId)}</span>
+                      <span className="text-[10px] opacity-75">{getPlayerPosition(playerId)}</span>
                     </div>
-                    <span className="text-xs font-semibold text-gray-600">
-                      {playerPoints.toFixed(1)}
-                    </span>
                   </div>
-                )
-              })}
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     )
   }
@@ -238,35 +228,38 @@ const CurrentMatchup = ({ leagueId, rosterId, playerDetails: initialPlayerDetail
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-sm p-6 mt-4">
-      <div className="mb-6">
-        <h2 className="text-xl font-bold text-gray-900">
+    <div className="space-y-6">
+      {/* Section 1: Current Week Matchup */}
+      <div>
+        <h2 className="text-xl font-bold text-gray-900 mb-4">
           Week {currentWeek} Matchup
         </h2>
+        <div className="bg-white rounded-lg shadow-sm p-6">
+          {opponentMatchup && opponentRosterData ? (
+            <div className="flex gap-4">
+              {renderRosterSide(userMatchup, userRosterData, 'Your Team', true)}
+              
+              <div className="flex flex-col items-center justify-center px-4">
+                <div className="text-2xl font-bold text-gray-400">VS</div>
+                {userMatchup.points > (opponentMatchup?.points || 0) && (
+                  <div className="text-green-600 text-sm mt-2 font-bold">Leading</div>
+                )}
+              </div>
+              
+              {renderRosterSide(opponentMatchup, opponentRosterData, 'Opponent', false)}
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-gray-600">Waiting for opponent...</p>
+            </div>
+          )}
+        </div>
       </div>
 
-      {opponentMatchup && opponentRosterData ? (
-        <div className="flex gap-4">
-          {renderRosterSide(userMatchup, userRosterData, 'Your Team', true)}
-          
-          <div className="flex flex-col items-center justify-center px-4">
-            <div className="text-2xl font-bold text-gray-400">VS</div>
-            {userMatchup.points > (opponentMatchup?.points || 0) ? (
-              <div className="text-green-600 text-xs mt-2 font-semibold">Leading</div>
-            ) : userMatchup.points < (opponentMatchup?.points || 0) ? (
-              <div className="text-red-600 text-xs mt-2 font-semibold">Trailing</div>
-            ) : (
-              <div className="text-gray-600 text-xs mt-2 font-semibold">Tied</div>
-            )}
-          </div>
-          
-          {renderRosterSide(opponentMatchup, opponentRosterData, 'Opponent', false)}
-        </div>
-      ) : (
-        <div className="text-center py-8">
-          <p className="text-gray-600">Waiting for opponent...</p>
-        </div>
-      )}
+      {/* Section 2: Power Rankings */}
+      <div>
+        <RosterRankingDashboard leagueId={leagueId} />
+      </div>
     </div>
   )
 }

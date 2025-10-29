@@ -799,6 +799,45 @@ export const clearRosterRankingCache = async (leagueId) => {
   }
 }
 
+/**
+ * Get AI-powered roster analysis for team(s)
+ * @param {string} leagueId - Sleeper league ID
+ * @param {string} rosterId - (Optional) Specific roster ID to analyze. If not provided, analyzes all rosters
+ * @param {boolean} forceRefresh - Force recalculation (skip cache)
+ * @returns {Promise<Object>} Roster analysis/analyses with strengths/weaknesses/analysis
+ */
+export const getRosterAnalysis = async (leagueId, rosterId = null, forceRefresh = false) => {
+  try {
+    const params = new URLSearchParams()
+    if (rosterId) params.append('roster_id', rosterId)
+    if (forceRefresh) params.append('refresh', 'true')
+    
+    const queryString = params.toString() ? `?${params.toString()}` : ''
+    const response = await api.get(`/api/roster-ranking/${leagueId}/analysis${queryString}`, { skipAuth: true })
+    return response.data
+  } catch (error) {
+    throw new Error(getErrorMessage(error))
+  }
+}
+
+/**
+ * Get AI-powered roster analysis for a single roster
+ * @param {string} leagueId - Sleeper league ID
+ * @param {string} rosterId - Roster ID to analyze
+ * @param {boolean} forceRefresh - Force recalculation (skip cache)
+ * @returns {Promise<Object>} Single roster analysis with strengths/weaknesses/analysis
+ */
+export const getSingleRosterAnalysis = async (leagueId, rosterId, forceRefresh = false) => {
+  try {
+    const params = forceRefresh ? '?refresh=true' : ''
+    const response = await api.get(`/api/roster-ranking/${leagueId}/roster/${rosterId}/analysis${params}`, { skipAuth: true })
+    return response.data
+  } catch (error) {
+    throw new Error(getErrorMessage(error))
+  }
+}
+
 // Export the axios instance as default for direct use if needed
 export default api
+
 

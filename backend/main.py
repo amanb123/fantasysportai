@@ -200,12 +200,14 @@ if not settings.cors_origins or settings.cors_origins == "http://localhost:3000,
 
 logger.info(f"CORS Origins: {cors_origins}")
 
-# Add CORS middleware
+# Add CORS middleware with regex support for Vercel preview deployments
+# Vercel generates URLs like: fantasysportai-*.vercel.app
 # Note: allow_credentials=True cannot be used with allow_origins=["*"]
 # So we disable credentials when using wildcard
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app$",  # Allow all Vercel preview URLs (e.g., fantasysportai-*.vercel.app)
     allow_credentials=(cors_origins != ["*"]),  # Only allow credentials if not using wildcard
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
@@ -3175,6 +3177,70 @@ async def delete_roster_ranking_cache(
     except Exception as e:
         logger.error(f"Error clearing ranking cache: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to clear ranking cache: {str(e)}")
+
+
+@app.get(
+    "/api/roster-ranking/{league_id}/analysis",
+    tags=["Roster Ranking"]
+)
+async def get_roster_analysis(
+    league_id: str,
+    roster_id: Optional[str] = Query(None, description="Specific roster ID to analyze (if not provided, analyzes all rosters)"),
+    refresh: bool = Query(False, description="Force refresh from API/cache"),
+    ranking_service = Depends(get_roster_ranking_service)
+):
+    """
+    Get AI-powered analysis for roster(s) in the league.
+    If roster_id is provided, returns analysis for that specific roster.
+    Otherwise, returns analysis for all rosters in the league.
+    """
+    if ranking_service is None:
+        raise HTTPException(status_code=503, detail="Roster ranking service unavailable.")
+    try:
+        # Get rankings first
+        rankings_data = await ranking_service.calculate_league_rankings(league_id, force_refresh=refresh)
+        all_rankings = rankings_data.get('rankings', [])
+        
+        # If roster_id specified, return only that roster's analysis
+        if roster_id:
+            roster_data = None
+            for roster in all_rankings:
+                if str(roster.get('roster_id')) == str(roster_id):
+                    roster_data = roster
+                    break
+            
+            if not roster_data:
+                raise HTTPException(status_code=404, detail=f"Roster {roster_id} not found in league {league_id}")
+            
+            # Generate analysis for the roster
+            analysis = ranking_service.generate_roster_analysis(roster_data, all_rankings)
+            
+            return {
+                'league_id': league_id,
+                'league_name': rankings_data.get('league_name', ''),
+                'roster_id': roster_id,
+                'analysis': analysis,
+                'last_updated': rankings_data.get('last_updated')
+            }
+        
+        # Otherwise, generate analysis for all rosters
+        analyses = []
+        for roster in all_rankings:
+            analysis = ranking_service.generate_roster_analysis(roster, all_rankings)
+            analyses.append(analysis)
+        
+        return {
+            'league_id': league_id,
+            'league_name': rankings_data.get('league_name', ''),
+            'analyses': analyses,
+            'last_updated': rankings_data.get('last_updated'),
+            'total_rosters': len(analyses)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating roster analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate roster analysis: {str(e)}")
 
 
 @app.websocket("/ws/league/{league_id}")

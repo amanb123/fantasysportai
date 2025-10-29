@@ -110,7 +110,7 @@ const SleeperProvider = ({ children }) => {
       dispatch({ type: SLEEPER_ACTIONS.SET_ERROR, payload: error.message })
       throw error
     }
-  }, [state.sleeperSession]) // Depend on entire session object
+  }, [state.sleeperSession?.user_id]) // Depend on user_id only
 
   // Fetch rosters and filter to user's roster
   const fetchRosters = useCallback(async (leagueId) => {
@@ -133,7 +133,7 @@ const SleeperProvider = ({ children }) => {
       dispatch({ type: SLEEPER_ACTIONS.SET_ERROR, payload: error.message })
       throw error
     }
-  }, [state.sleeperSession]) // Depend on entire session object
+  }, [state.sleeperSession?.user_id]) // Depend on user_id only
 
   // Select a league and prepare for roster display
   const selectLeague = useCallback(async (league) => {
@@ -205,7 +205,7 @@ const SleeperProvider = ({ children }) => {
         console.error('Failed to refresh roster:', error)
       })
     }
-  }, [state.selectedLeague, fetchRosters])
+  }, [state.selectedLeague?.league_id, fetchRosters])
 
   // Disconnect from league WebSocket
   const disconnectFromLeagueUpdates = useCallback(() => {
