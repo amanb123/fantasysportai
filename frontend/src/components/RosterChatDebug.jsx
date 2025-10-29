@@ -6,7 +6,7 @@ import { createChatWebSocketConnection } from '../services/websocket'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorMessage from './ErrorMessage'
 
-const RosterChat = () => {
+const RosterChatDebug = () => {
   const { sessionId: routeSessionId } = useParams()
   const navigate = useNavigate()
   const { sleeperSession, selectedLeague, userRoster } = useSleeper()
@@ -20,67 +20,59 @@ const RosterChat = () => {
   const [isInitializing, setIsInitializing] = useState(true)
   const [rosterAnalysis, setRosterAnalysis] = useState(null)
   const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [debugInfo, setDebugInfo] = useState([])
   
   const messagesEndRef = useRef(null)
   const wsRef = useRef(null)
 
+  const addDebug = (msg) => {
+    console.log('[DEBUG]', msg)
+    setDebugInfo(prev => [...prev, `${new Date().toLocaleTimeString()}: ${msg}`])
+  }
+
   // Initialize chat session
   useEffect(() => {
     const initializeChat = async () => {
-      console.log('RosterChat: useEffect triggered', {
-        hasSleeperSession: !!sleeperSession,
-        userId: sleeperSession?.user_id,
-        hasLeague: !!selectedLeague,
-        leagueId: selectedLeague?.league_id,
-        hasRoster: !!userRoster,
-        rosterId: userRoster?.roster_id,
-        routeSessionId,
-        currentSessionId: sessionId
-      })
-
-      // Check for required context data using IDs (matching dependencies)
-      if (!sleeperSession?.user_id) {
-        console.error('RosterChat: No Sleeper session user_id found')
-        setIsInitializing(false)
-        setError('No Sleeper session found. Please log in first.')
-        return
-      }
-      
-      if (!selectedLeague?.league_id) {
-        console.error('RosterChat: No league_id found')
-        setIsInitializing(false)
-        setError('No league selected. Please select a league first.')
-        return
-      }
-      
-      if (!userRoster?.roster_id) {
-        console.error('RosterChat: No roster_id found')
-        setIsInitializing(false)
-        setError('No user roster found. Please select your roster first.')
-        return
-      }
-      
-      // Don't re-initialize if we already have a session matching the route
-      if (sessionId && sessionId === routeSessionId) {
-        console.log('RosterChat: Already have matching session, skipping init')
-        setIsInitializing(false)
-        return
-      }
-
-      // If we have a non-matching sessionId, don't create a new one unless route changed
-      if (sessionId && !routeSessionId) {
-        console.log('RosterChat: Already have session, skipping init')
-        setIsInitializing(false)
-        return
-      }
-
       try {
+        addDebug('Initializing chat...')
         setError(null)
-        console.log('RosterChat: Starting initialization...')
+        
+        // Check for required context data
+        if (!sleeperSession) {
+          addDebug('ERROR: No Sleeper session found')
+          console.error('No Sleeper session found')
+          // Don't navigate in debug mode
+          // navigate('/')
+          setIsInitializing(false)
+          setError('No Sleeper session found - this is expected in debug mode')
+          return
+        }
+        
+        addDebug(`Sleeper session found: ${sleeperSession.user_id}`)
+        
+        if (!selectedLeague) {
+          addDebug('ERROR: No league selected')
+          console.error('No league selected')
+          setIsInitializing(false)
+          setError('No league selected')
+          return
+        }
+        
+        addDebug(`League selected: ${selectedLeague.league_id}`)
+        
+        if (!userRoster) {
+          addDebug('ERROR: No user roster found')
+          console.error('No user roster found')
+          setIsInitializing(false)
+          setError('No user roster found')
+          return
+        }
+        
+        addDebug(`User roster found: ${userRoster.roster_id}`)
         
         if (routeSessionId) {
           // Load existing chat
-          console.log('RosterChat: Loading existing chat:', routeSessionId)
+          addDebug(`Loading existing chat session: ${routeSessionId}`)
           const history = await getChatHistory(routeSessionId)
           setMessages(history.messages.map(msg => ({
             role: msg.role,
@@ -89,9 +81,10 @@ const RosterChat = () => {
             metadata: msg.metadata
           })))
           setSessionId(routeSessionId)
+          addDebug(`Loaded ${history.messages.length} messages`)
         } else {
-          // Create new chat
-          console.log('RosterChat: Creating new chat session')
+          // Create new chat session
+          addDebug('Creating new chat session...')
           const response = await startRosterChat(
             selectedLeague.league_id,
             userRoster.roster_id,
@@ -99,8 +92,8 @@ const RosterChat = () => {
             null
           )
           
-          console.log('RosterChat: New session created:', response.session_id)
           setSessionId(response.session_id)
+          addDebug(`Chat session created: ${response.session_id}`)
           
           if (response.initial_response) {
             setMessages([{
@@ -108,31 +101,39 @@ const RosterChat = () => {
               content: response.initial_response,
               timestamp: new Date().toISOString()
             }])
+            addDebug('Initial response received')
           }
         }
         
-        console.log('RosterChat: Initialization complete')
+        addDebug('Chat initialization complete')
         setIsInitializing(false)
       } catch (err) {
-        console.error('RosterChat: Error initializing chat:', err)
+        addDebug(`ERROR initializing chat: ${err.message}`)
+        console.error('Error initializing chat:', err)
         setError(err.message || 'Failed to initialize chat')
         setIsInitializing(false)
       }
     }
     
     initializeChat()
-  }, [routeSessionId, sleeperSession?.user_id, selectedLeague?.league_id, userRoster?.roster_id])
+  }, [routeSessionId, sleeperSession?.user_id, selectedLeague?.league_id, userRoster?.roster_id, navigate])
 
   // Fetch roster analysis
   useEffect(() => {
     const fetchAnalysis = async () => {
-      if (!selectedLeague?.league_id || !userRoster?.roster_id) return
+      if (!selectedLeague?.league_id || !userRoster?.roster_id) {
+        addDebug('Skipping analysis fetch - missing league or roster')
+        return
+      }
       
       try {
+        addDebug(`Fetching roster analysis for league ${selectedLeague.league_id}, roster ${userRoster.roster_id}`)
         setAnalysisLoading(true)
         const data = await getRosterAnalysis(selectedLeague.league_id, userRoster.roster_id)
         setRosterAnalysis(data)
+        addDebug(`Analysis loaded: ${data.analysis?.owner_name}`)
       } catch (err) {
+        addDebug(`ERROR fetching analysis: ${err.message}`)
         console.error('Error fetching roster analysis:', err)
         // Don't set error state - analysis is optional
       } finally {
@@ -147,33 +148,25 @@ const RosterChat = () => {
   useEffect(() => {
     if (!sessionId) return
     
-    const handleChatMessage = (messageData) => {
-      const { role, content, timestamp, metadata } = messageData
-      
-      // Check for duplicate inline to avoid stale closure
-      setMessages(prev => {
-        const isDuplicate = prev.some(msg => 
-          msg.content === content && 
-          Math.abs(new Date(msg.timestamp) - new Date(timestamp)) < 1000
-        )
-        
-        if (isDuplicate) return prev
-        
-        return [...prev, { role, content, timestamp, metadata }]
-      })
-    }
-    
+    addDebug(`Connecting WebSocket for session: ${sessionId}`)
     const ws = createChatWebSocketConnection(sessionId, {
       onConnect: () => {
+        addDebug('WebSocket connected')
         console.log('Chat WebSocket connected')
         setWsConnected(true)
       },
-      onChatMessage: handleChatMessage,
+      onChatMessage: (data) => {
+        addDebug(`WebSocket message received: ${data.role}`)
+        console.log('Received chat message:', data)
+        handleIncomingMessage(data)
+      },
       onError: (error) => {
+        addDebug(`WebSocket error: ${error}`)
         console.error('WebSocket error:', error)
         setWsConnected(false)
       },
       onDisconnect: () => {
+        addDebug('WebSocket disconnected')
         console.log('Chat WebSocket disconnected')
         setWsConnected(false)
       }
@@ -189,10 +182,19 @@ const RosterChat = () => {
     }
   }, [sessionId])
 
-  // Auto-scroll to bottom when messages change
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  const handleIncomingMessage = (messageData) => {
+    const { role, content, timestamp, metadata } = messageData
+    
+    // Check for duplicate
+    const isDuplicate = messages.some(msg => 
+      msg.content === content && 
+      Math.abs(new Date(msg.timestamp) - new Date(timestamp)) < 1000
+    )
+    
+    if (!isDuplicate) {
+      setMessages(prev => [...prev, { role, content, timestamp, metadata }])
+    }
+  }
 
   const handleSendMessage = async (e) => {
     e.preventDefault()
@@ -200,6 +202,7 @@ const RosterChat = () => {
     const trimmedMessage = inputMessage.trim()
     if (!trimmedMessage || loading) return
     
+    addDebug(`Sending message: ${trimmedMessage.substring(0, 50)}...`)
     // Add user message optimistically
     const userMessage = {
       role: 'user',
@@ -213,6 +216,7 @@ const RosterChat = () => {
     try {
       // Send message to API
       const response = await sendChatMessage(sessionId, trimmedMessage)
+      addDebug('Message sent successfully')
       
       // Response comes via WebSocket, but add fallback
       if (!wsConnected) {
@@ -225,6 +229,7 @@ const RosterChat = () => {
       }
       
     } catch (err) {
+      addDebug(`ERROR sending message: ${err.message}`)
       console.error('Error sending message:', err)
       // Remove optimistic message on error
       setMessages(prev => prev.filter(msg => msg !== userMessage))
@@ -242,50 +247,6 @@ const RosterChat = () => {
     }
   }
 
-  // Handle quick action button clicks
-  const handleQuickAction = async (message) => {
-    if (loading) return
-    
-    setInputMessage(message)
-    setLoading(true)
-    
-    // Add user message optimistically
-    const userMessage = {
-      role: 'user',
-      content: message,
-      timestamp: new Date().toISOString()
-    }
-    setMessages(prev => [...prev, userMessage])
-    
-    try {
-      // Send message to API
-      const response = await sendChatMessage(sessionId, message)
-      
-      // Response comes via WebSocket, but add fallback
-      if (!wsConnected) {
-        setMessages(prev => [...prev, {
-          role: response.role,
-          content: response.content,
-          timestamp: response.timestamp,
-          metadata: response.metadata
-        }])
-      }
-      
-      // Clear input after successful send
-      setInputMessage('')
-      
-    } catch (err) {
-      console.error('Error sending message:', err)
-      // Remove optimistic message on error
-      setMessages(prev => prev.filter(msg => msg !== userMessage))
-      setError(err.message || 'Failed to send message')
-      // Keep the message in input on error
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Get rank badge color
   const getRankBadgeColor = (rank) => {
     if (rank === 1) return 'bg-yellow-500 text-white'
     if (rank === 2) return 'bg-gray-400 text-white'
@@ -294,35 +255,62 @@ const RosterChat = () => {
     return 'bg-blue-600 text-white'
   }
 
-  console.log('RosterChat render:', {
-    isInitializing,
-    error,
-    sessionId,
-    messagesCount: messages.length,
-    hasAnalysis: !!rosterAnalysis
-  })
+  addDebug(`Render: isInitializing=${isInitializing}, error=${!!error}, sessionId=${!!sessionId}`)
 
   if (isInitializing) {
-    console.log('RosterChat: Rendering loading spinner')
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
         <LoadingSpinner />
+        <div className="mt-4 text-sm text-gray-600">
+          <h3 className="font-bold mb-2">Debug Info:</h3>
+          <div className="bg-white rounded p-2 max-h-40 overflow-y-auto">
+            {debugInfo.map((info, idx) => (
+              <div key={idx} className="text-xs">{info}</div>
+            ))}
+          </div>
+        </div>
       </div>
     )
   }
 
   if (error && !sessionId) {
-    console.log('RosterChat: Rendering error message:', error)
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
         <ErrorMessage message={error} />
+        <div className="mt-4 text-sm text-gray-600 max-w-2xl">
+          <h3 className="font-bold mb-2">Debug Info:</h3>
+          <div className="bg-white rounded p-4 max-h-60 overflow-y-auto">
+            {debugInfo.map((info, idx) => (
+              <div key={idx} className="text-xs mb-1">{info}</div>
+            ))}
+          </div>
+          <div className="mt-4 bg-yellow-50 border border-yellow-200 rounded p-3">
+            <h4 className="font-bold text-yellow-800">Context Status:</h4>
+            <div className="text-xs mt-2">
+              <div>Sleeper Session: {sleeperSession ? '✅' : '❌'}</div>
+              <div>Selected League: {selectedLeague ? '✅' : '❌'}</div>
+              <div>User Roster: {userRoster ? '✅' : '❌'}</div>
+            </div>
+          </div>
+        </div>
       </div>
     )
   }
 
-  console.log('RosterChat: Rendering main UI')
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
+      {/* Debug Panel */}
+      <div className="bg-yellow-50 border-b border-yellow-200 px-4 py-2">
+        <details className="text-xs">
+          <summary className="cursor-pointer font-bold">🐛 Debug Info (click to expand)</summary>
+          <div className="mt-2 max-h-40 overflow-y-auto bg-white p-2 rounded">
+            {debugInfo.map((info, idx) => (
+              <div key={idx}>{info}</div>
+            ))}
+          </div>
+        </details>
+      </div>
+
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 shadow-sm">
         <div className="max-w-5xl mx-auto">
@@ -330,7 +318,7 @@ const RosterChat = () => {
             <div>
               <h1 className="text-2xl font-bold text-gray-900 flex items-center space-x-2">
                 <span>🏀</span>
-                <span>Roster Assistant</span>
+                <span>Roster Assistant (DEBUG MODE)</span>
               </h1>
               <p className="text-sm text-gray-600 mt-1">
                 {selectedLeague?.name} - {sleeperSession?.display_name || sleeperSession?.username}
@@ -364,32 +352,80 @@ const RosterChat = () => {
               <LoadingSpinner message="Loading roster analysis..." />
             </div>
           ) : rosterAnalysis?.analysis ? (
-            <div className="space-y-4">
-              {/* Analysis Text */}
-              {rosterAnalysis.analysis.analysis && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <h3 className="text-lg font-semibold text-blue-900 mb-3">Roster Analysis</h3>
-                  <p className="text-sm text-blue-800 leading-relaxed">
-                    {rosterAnalysis.analysis.analysis.replace(/^[^\s]+\s+is/, 'Your roster is')}
-                  </p>
-                </div>
-              )}
-
-              {/* Top Players & Injuries */}
-              <div className="flex items-center justify-between text-sm text-gray-600">
-                {rosterAnalysis.analysis.top_players && rosterAnalysis.analysis.top_players.length > 0 && (
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+              {/* Analysis Header */}
+              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className={`inline-flex items-center justify-center w-10 h-10 rounded-full ${getRankBadgeColor(rosterAnalysis.analysis.rank)}`}>
+                    <span className="text-sm font-bold">#{rosterAnalysis.analysis.rank}</span>
+                  </div>
                   <div>
-                    <span className="font-medium">Top performers:</span> {rosterAnalysis.analysis.top_players.join(', ')}
+                    <h2 className="text-xl font-bold text-gray-900">{rosterAnalysis.analysis.owner_name}</h2>
+                    <p className="text-sm text-gray-600">{rosterAnalysis.analysis.total_fantasy_points.toFixed(1)} points</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Analysis Content */}
+              <div className="px-6 py-4 space-y-4">
+                {/* Key Strengths */}
+                {rosterAnalysis.analysis.strengths && rosterAnalysis.analysis.strengths.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-green-700 mb-2">Key Strengths</h3>
+                    <ul className="space-y-1">
+                      {rosterAnalysis.analysis.strengths.map((strength, idx) => (
+                        <li key={idx} className="text-sm text-gray-700 flex items-start">
+                          <span className="text-green-600 mr-2">•</span>
+                          <span>{strength}</span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
-                {(rosterAnalysis.analysis.injured_count ?? 0) > 0 && (
-                  <div className="text-red-600">
-                    🏥 {rosterAnalysis.analysis.injured_count} injured
+
+                {/* Weaknesses */}
+                {rosterAnalysis.analysis.weaknesses && rosterAnalysis.analysis.weaknesses.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-red-700 mb-2">Weaknesses</h3>
+                    <ul className="space-y-1">
+                      {rosterAnalysis.analysis.weaknesses.map((weakness, idx) => (
+                        <li key={idx} className="text-sm text-gray-700 flex items-start">
+                          <span className="text-red-600 mr-2">•</span>
+                          <span>{weakness}</span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
+
+                {/* Analysis Text */}
+                {rosterAnalysis.analysis.analysis && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-blue-900 mb-2">Analysis</h3>
+                    <p className="text-sm text-blue-800 leading-relaxed">{rosterAnalysis.analysis.analysis}</p>
+                  </div>
+                )}
+
+                {/* Top Players & Injuries */}
+                <div className="flex items-center justify-between text-xs text-gray-600 pt-2 border-t border-gray-100">
+                  {rosterAnalysis.analysis.top_players && rosterAnalysis.analysis.top_players.length > 0 && (
+                    <div>
+                      <span className="font-medium">Top performers:</span> {rosterAnalysis.analysis.top_players.join(', ')}
+                    </div>
+                  )}
+                  {rosterAnalysis.analysis.injured_count > 0 && (
+                    <div className="text-red-600">
+                      🏥 {rosterAnalysis.analysis.injured_count} injured
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          ) : null}
+          ) : (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm">
+              No roster analysis available
+            </div>
+          )}
 
           {/* Section 2: Chat Messages */}
           <div className="space-y-4">
@@ -414,11 +450,6 @@ const RosterChat = () => {
                       <span>
                         {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
-                      {msg.metadata?.historical_stats_fetched && (
-                        <span className="ml-2 bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
-                          📊 Historical data
-                        </span>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -441,29 +472,6 @@ const RosterChat = () => {
           </div>
         </div>
       </div>
-
-      {/* Quick Action Buttons */}
-      {!loading && (
-        <div className="bg-gray-50 border-t border-gray-200 px-6 py-3">
-          <div className="max-w-5xl mx-auto">
-            <div className="flex items-center space-x-2 overflow-x-auto pb-1">
-              <span className="text-xs font-medium text-gray-600 whitespace-nowrap">Quick Actions:</span>
-              <button
-                onClick={() => handleQuickAction('Show me the best available free agents')}
-                className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors whitespace-nowrap"
-              >
-                🔍 Find Free Agents
-              </button>
-              <button
-                onClick={() => handleQuickAction('What players should I start this week?')}
-                className="px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors whitespace-nowrap"
-              >
-                ⭐ Lineup Advice
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Input Area */}
       <div className="bg-white border-t border-gray-200 shadow-lg">
@@ -513,4 +521,4 @@ const RosterChat = () => {
   )
 }
 
-export default RosterChat
+export default RosterChatDebug

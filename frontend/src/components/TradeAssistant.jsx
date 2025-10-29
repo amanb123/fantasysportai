@@ -21,7 +21,7 @@ export default function TradeAssistant() {
     if (!sleeperSession || !selectedLeague || !userRoster) {
       navigate('/');
     }
-  }, [sleeperSession, selectedLeague, userRoster, navigate]);
+  }, [sleeperSession?.user_id, selectedLeague?.league_id, userRoster?.roster_id, navigate]);
 
   if (!sleeperSession || !selectedLeague || !userRoster) {
     return null;

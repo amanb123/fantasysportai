@@ -28,7 +28,7 @@ const LeagueSelection = () => {
       navigate('/')
       return
     }
-  }, [sleeperSession, navigate])
+  }, [sleeperSession?.user_id, navigate])
 
   // Fetch leagues ONLY ONCE when component mounts with a session
   useEffect(() => {
