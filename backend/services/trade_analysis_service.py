@@ -416,8 +416,8 @@ class TradeAnalysisService:
             lines.append(f"**Upcoming Games (Next 7 Days):** {upcoming_games}")
             lines.append(stats_summary)
             
-            # Add injury news if available
-            if injury_news:
+            # Add injury news if available (must be a dict, not a string)
+            if injury_news and isinstance(injury_news, dict):
                 lines.append(f"\n**Latest News (ESPN):**")
                 lines.append(f"- **Status:** {injury_news.get('status', 'Unknown')}")
                 if injury_news.get('description'):
@@ -486,8 +486,11 @@ class TradeAnalysisService:
             
             # Use nba_cache_service if available
             if self.nba_cache_service:
-                # Get all games for current season
-                schedule = await self.nba_cache_service.get_full_season_schedule()
+                # Get cached schedule
+                schedule = await self.nba_cache_service.get_cached_schedule(
+                    start_date=str(today),
+                    end_date=str(end_date)
+                )
                 
                 # Filter for upcoming games in next 7 days for this team
                 team_games = []
