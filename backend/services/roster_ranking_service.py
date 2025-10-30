@@ -83,13 +83,26 @@ class RosterRankingService:
         rankings = []
         for roster in rosters:
             stats = await self._calculate_roster_stats(roster, all_players, scoring_settings)
-            wins = roster.get('settings', {}).get('wins', 0)
-            losses = roster.get('settings', {}).get('losses', 0)
+            
+            # Get wins/losses from roster settings - ensure they're integers
+            settings = roster.get('settings', {})
+            wins = int(settings.get('wins', 0) or 0)  # Handle None values
+            losses = int(settings.get('losses', 0) or 0)  # Handle None values
+            
+            # Log the roster data to debug win/loss values
+            logger.info(f"Roster {roster.get('roster_id')}: wins={wins} (type={type(wins)}), losses={losses} (type={type(losses)}), settings={settings}")
+            
             base_points = stats['total_fantasy_points']
             
             # Calculate multiplier: (1 + 0.10 * wins - 0.05 * losses)
             win_multiplier = 1 + (WIN_BONUS * wins) - (LOSS_PENALTY * losses)
             adjusted_points = base_points * win_multiplier
+            
+            # Calculate actual bonus/penalty values
+            win_bonus_value = base_points * WIN_BONUS * wins if wins > 0 else 0.0
+            loss_penalty_value = base_points * LOSS_PENALTY * losses if losses > 0 else 0.0
+            
+            logger.info(f"Roster {roster.get('roster_id')}: base={base_points:.2f}, win_bonus={win_bonus_value:.2f}, loss_penalty={loss_penalty_value:.2f}, adjusted={adjusted_points:.2f}")
             
             rankings.append({
                 'roster_id': roster['roster_id'],
@@ -100,8 +113,8 @@ class RosterRankingService:
                 'wins': wins,
                 'losses': losses,
                 'win_multiplier': win_multiplier,
-                'win_bonus': base_points * WIN_BONUS * wins if wins > 0 else 0,
-                'loss_penalty': base_points * LOSS_PENALTY * losses if losses > 0 else 0,
+                'win_bonus': win_bonus_value,
+                'loss_penalty': loss_penalty_value,
                 'category_scores': stats['category_scores'],
                 'category_percentiles': {},
                 'player_breakdown': stats.get('player_breakdown', []),  # Detailed per-player contributions

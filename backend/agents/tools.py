@@ -155,7 +155,6 @@ class RosterAdvisorTools:
         player_cache_service,
         sleeper_service,
         nba_stats_service=None,
-        nba_mcp_service=None,
         nba_news_service=None
     ):
         """Initialize tools with necessary services."""
@@ -166,7 +165,6 @@ class RosterAdvisorTools:
         self.player_cache = player_cache_service
         self.sleeper_service = sleeper_service
         self.nba_stats = nba_stats_service
-        self.nba_mcp = nba_mcp_service
         self.nba_news = nba_news_service
         
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -873,26 +871,7 @@ class RosterAdvisorTools:
     async def _get_player_season_stats(self, player_name: str) -> str:
         """Get NBA season statistics for a specific player including recent game performance."""
         try:
-            # Try MCP service first if available
-            if self.nba_mcp:
-                from backend.config import settings
-                if settings.nba_mcp_enabled:
-                    logger.info(f"Using MCP service to fetch stats for {player_name}")
-                    
-                    # Get player info and stats via MCP
-                    player_info = await self.nba_mcp.get_player_info(player_name)
-                    if not player_info:
-                        return f"No player found matching '{player_name}'"
-                    
-                    # Get player stats
-                    stats_data = await self.nba_mcp.get_player_stats(player_name)
-                    if not stats_data:
-                        return f"**{player_name}**\n\nNo statistics available for this player."
-                    
-                    # Format the stats from MCP
-                    return await self._format_mcp_player_stats(player_name, stats_data, player_info)
-            
-            # Fall back to old NBA stats service
+            # Use NBA stats service
             if not self.nba_stats:
                 return "NBA stats service is not available. Historical stats are disabled."
             
@@ -1038,138 +1017,6 @@ class RosterAdvisorTools:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return f"Error getting player season stats: {str(e)}"
     
-    async def _format_mcp_player_stats(self, player_name: str, stats_data: Dict, player_info: Dict) -> str:
-        """Format player stats from MCP service."""
-        try:
-            import json
-            logger.debug(f"MCP stats data for {player_name}: {json.dumps(stats_data, indent=2)[:1000]}")
-            
-            result = f"**{player_name}**\n"
-            
-            # Add team info
-            team = player_info.get('team', player_info.get('team_abbreviation', 'N/A'))
-            position = player_info.get('position', 'N/A')
-            result += f"Team: {team} | Position: {position}\n\n"
-            
-            # Extract season data from MCP response
-            result_sets = stats_data.get('resultSets', [])
-            if not result_sets:
-                return f"{result}No statistics available."
-            
-            # Find SeasonTotalsRegularSeason
-            season_data = None
-            for result_set in result_sets:
-                if result_set.get('name') == 'SeasonTotalsRegularSeason':
-                    season_data = result_set
-                    break
-            
-            if not season_data or not season_data.get('rowSet'):
-                return f"{result}No season data available."
-            
-            headers = season_data.get('headers', [])
-            rows = season_data.get('rowSet', [])
-            
-            logger.info(f"Headers: {headers}")
-            logger.info(f"Last season row: {rows[-1] if rows else 'No rows'}")
-            
-            # Get the most recent season (last row)
-            if rows:
-                latest_season = rows[-1]
-                stats_dict = dict(zip(headers, latest_season))
-                
-                season_id = stats_dict.get('SEASON_ID', 'Unknown')
-                gp = stats_dict.get('GP', 0)
-                pts = stats_dict.get('PTS', 0)
-                reb = stats_dict.get('REB', 0)
-                ast = stats_dict.get('AST', 0)
-                
-                logger.info(f"Extracted: GP={gp}, PTS={pts}, REB={reb}, AST={ast}")
-                
-                stl = stats_dict.get('STL', 0)
-                blk = stats_dict.get('BLK', 0)
-                tov = stats_dict.get('TOV', 0)
-                fgm = stats_dict.get('FGM', 0)
-                fga = stats_dict.get('FGA', 0)
-                fg3m = stats_dict.get('FG3M', 0)
-                fg3a = stats_dict.get('FG3A', 0)
-                ftm = stats_dict.get('FTM', 0)
-                fta = stats_dict.get('FTA', 0)
-                fg_pct = stats_dict.get('FG_PCT', 0)
-                fg3_pct = stats_dict.get('FG3_PCT', 0)
-                ft_pct = stats_dict.get('FT_PCT', 0)
-                
-                result += f"**{season_id} Season Averages** ({gp} games):\n"
-                
-                # Stats are already per-game averages from MCP, no need to divide by GP
-                result += f"- Points: {pts:.1f} PPG\n"
-                result += f"- Rebounds: {reb:.1f} RPG\n"
-                result += f"- Assists: {ast:.1f} APG\n"
-                result += f"- Steals: {stl:.1f} SPG\n"
-                result += f"- Blocks: {blk:.1f} BPG\n"
-                result += f"- Turnovers: {tov:.1f} TOV\n\n"
-                
-                # Shooting percentages are already percentages (0-1), convert to 0-100
-                result += f"**Shooting:**\n"
-                result += f"- FG%: {fg_pct * 100:.1f}%\n"
-                result += f"- 3P%: {fg3_pct * 100:.1f}%\n"
-                result += f"- FT%: {ft_pct * 100:.1f}%\n\n"
-                
-                # Try to fetch recent game logs
-                try:
-                    if self.nba_mcp and gp > 0:
-                        from datetime import datetime, timedelta
-                        player_id = player_info.get('player_id')
-                        
-                        if player_id:
-                            # Try to get last 10 games - go back 60 days to be safe
-                            end_date = datetime.now().date()
-                            start_date = end_date - timedelta(days=60)
-                            
-                            logger.info(f"Fetching game logs for {player_name} (player_id: {player_id})")
-                            game_logs = await self.nba_mcp.get_player_game_logs(
-                                player_id=player_id,
-                                start_date=start_date,
-                                end_date=end_date
-                            )
-                            
-                            if game_logs and len(game_logs) > 0:
-                                # Show last 10 games
-                                num_games = min(10, len(game_logs))
-                                recent_games = game_logs[:num_games]
-                                
-                                # XML marker to force LLM to display game logs verbatim
-                                game_log_section = f"**Last {num_games} Game{'s' if num_games > 1 else ''}:**\n"
-                                for i, game in enumerate(recent_games, 1):
-                                    # Handle both uppercase (MCP) and lowercase keys
-                                    game_date = game.get('GAME_DATE', game.get('date', 'N/A'))
-                                    if 'T00:00:00' in str(game_date):
-                                        game_date = game_date.split('T')[0]  # Extract date part
-                                    opponent = game.get('MATCHUP', game.get('opponent', 'N/A'))
-                                    pts = game.get('PTS', game.get('pts', 0))
-                                    reb = game.get('REB', game.get('reb', 0))
-                                    ast = game.get('AST', game.get('ast', 0))
-                                    stl = game.get('STL', game.get('stl', 0))
-                                    blk = game.get('BLK', game.get('blk', 0))
-                                    tov = game.get('TOV', game.get('tov', 0))
-                                    
-                                    # Calculate fantasy points for this game
-                                    fantasy_pts = pts + (1.2 * reb) + (1.5 * ast) + (3 * stl) + (3 * blk) - tov
-                                    
-                                    game_log_section += f"{i}. {game_date} {opponent}: {pts} PTS, {reb} REB, {ast} AST, {stl} STL, {blk} BLK, {tov} TOV"
-                                    game_log_section += f" → **Fantasy: {fantasy_pts:.1f}**\n"
-                                
-                                # Wrap game logs with XML marker so LLM displays them verbatim
-                                result += f"<TOOL_OUTPUT_START_GAME_LOGS>\n{game_log_section}<TOOL_OUTPUT_END_GAME_LOGS>\n\n"
-                            else:
-                                logger.info(f"No game logs found for {player_name}")
-                except Exception as game_log_error:
-                    logger.warning(f"Could not fetch game logs from MCP for {player_name}: {game_log_error}")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error formatting MCP player stats: {e}")
-            return f"**{player_name}**\n\nError formatting statistics."
     
     async def _get_espn_injury_news(self, player_name: str) -> str:
         """Get ESPN injury news for a specific player."""
