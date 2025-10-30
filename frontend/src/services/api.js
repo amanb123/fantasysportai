@@ -52,8 +52,9 @@ export const removeSleeperSession = () => {
 
 // Create axios instance with default configuration
 // Use longer timeout for production since roster ranking calculation can take 60-90 seconds
+// Matchup simulation can also take 60+ seconds for complex scenarios
 const isDevelopment = import.meta.env.DEV
-const API_TIMEOUT = isDevelopment ? 30000 : 90000 // 30s dev, 90s prod
+const API_TIMEOUT = isDevelopment ? 60000 : 120000 // 60s dev, 120s prod
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3002',

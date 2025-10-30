@@ -83,14 +83,24 @@ class NBANewsService:
             logger.error(f"Error getting injury info for {player_name}: {e}")
             return None
 
-    async def check_injury_status(self, player_name: str) -> Optional[str]:
+    async def check_injury_status(self, player_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Check injury status for a player from ESPN injury report.
+        Returns a dict with keys: team, name, position, date, game_status, injury
+        """
         try:
             injury = await self.get_player_injury(player_name)
             if injury:
-                injury_type = injury.get('injury', 'Unknown')
-                game_status = injury.get('game_status', 'Unknown')
-                summary = f"🏥 {injury_type} - {game_status}"
-                return summary
+                # Return the full injury dict with all available data
+                return {
+                    "status": injury.get('game_status', 'Unknown'),
+                    "injury": injury.get('injury', 'Unknown'),
+                    "description": injury.get('injury', 'Unknown'),
+                    "date": injury.get('date', 'Unknown'),
+                    "team": injury.get('team', 'Unknown'),
+                    "position": injury.get('position', 'Unknown'),
+                    "name": injury.get('name', 'Unknown')
+                }
             return None
         except Exception as e:
             logger.error(f"Error checking injury status for {player_name}: {e}")
