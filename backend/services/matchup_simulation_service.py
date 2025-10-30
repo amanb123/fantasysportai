@@ -9,6 +9,7 @@ import logging
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 import json
+import asyncio
 
 from backend.services.sleeper_service import SleeperService
 from backend.services.nba_stats_service import NBAStatsService
@@ -28,6 +29,8 @@ class MatchupSimulationService:
     ):
         self.sleeper_service = sleeper_service
         self.nba_stats_service = nba_stats_service
+        # Cache schedule during a single simulation to avoid redundant fetches
+        self._schedule_cache: Dict[str, List[Dict[str, Any]]] = {}
     
     async def simulate_next_weeks(
         self,
@@ -74,6 +77,9 @@ class MatchupSimulationService:
             }
         """
         try:
+            # Clear schedule cache for this simulation
+            self._schedule_cache = {}
+            
             logger.info(f"Simulating {weeks} weeks for league {league_id} (user roster {user_roster_id})")
             
             # Fetch league info to get current week and settings
@@ -308,9 +314,10 @@ class MatchupSimulationService:
             if not active_players:
                 return 0.0
             
-            total_points = 0.0
+            # Prepare tasks for parallel execution
+            tasks = []
+            player_data = []
             
-            # Calculate points for each player
             for player_id in active_players:
                 player = all_players.get(player_id, {})
                 full_name = player.get("full_name", player_id)
@@ -321,20 +328,32 @@ class MatchupSimulationService:
                     logger.info(f"Skipping {full_name} - {injury_status}")
                     continue
                 
-                # Get player projection
-                try:
-                    player_points = await self._get_player_projection_via_mcp(
-                        player=player,
-                        scoring_settings=scoring_settings,
-                        start_date=start_date,
-                        end_date=end_date
-                    )
-                    if player_points > 0:
-                        total_points += player_points
-                        logger.debug(f"Added {full_name}: {player_points:.1f} pts (running total: {total_points:.1f})")
-                except Exception as e:
-                    logger.warning(f"Could not project {full_name}: {e}")
+                # Create task for this player
+                tasks.append(self._get_player_projection_via_mcp(
+                    player=player,
+                    scoring_settings=scoring_settings,
+                    start_date=start_date,
+                    end_date=end_date
+                ))
+                player_data.append((player_id, full_name))
+            
+            # Execute all player projections in parallel
+            if not tasks:
+                return 0.0
+            
+            logger.debug(f"Calculating {len(tasks)} player projections in parallel...")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Sum up results
+            total_points = 0.0
+            for (player_id, full_name), result in zip(player_data, results):
+                if isinstance(result, Exception):
+                    logger.warning(f"Could not project {full_name}: {result}")
                     continue
+                
+                if result > 0:
+                    total_points += result
+                    logger.debug(f"Added {full_name}: {result:.1f} pts (running total: {total_points:.1f})")
             
             logger.info(f"Total projected points: {total_points:.1f} ({len(active_players)} players)")
             return total_points
@@ -384,7 +403,14 @@ class MatchupSimulationService:
             else:  # Jan-Sep
                 season = str(start.year - 1)
             
-            schedule = await self.nba_stats_service.fetch_season_schedule(season=season)
+            # Use cached schedule if available
+            if season not in self._schedule_cache:
+                logger.debug(f"Fetching and caching schedule for season {season}")
+                schedule = await self.nba_stats_service.fetch_season_schedule(season=season)
+                self._schedule_cache[season] = schedule or []
+            else:
+                logger.debug(f"Using cached schedule for season {season}")
+                schedule = self._schedule_cache[season]
             
             if not schedule:
                 logger.debug(f"{full_name} ({team}): Could not fetch schedule")
