@@ -184,7 +184,7 @@ class RosterAdvisorTools:
             if tool_name == "search_available_players":
                 return await self._search_available_players(
                     position=arguments.get("position", ""),
-                    limit=arguments.get("limit", 10)
+                    limit=arguments.get("limit", 5)
                 )
             
             elif tool_name == "get_opponent_roster":
@@ -455,70 +455,50 @@ class RosterAdvisorTools:
             
             # Format results with stats and news - Use XML markers to prevent LLM summarization
             result = "\n<TOOL_OUTPUT_START - DO NOT MODIFY OR SUMMARIZE - DISPLAY EXACTLY AS IS>\n\n"
-            result += "="*70 + "\n"
-            result += f"🏀 **TOP {len(available)} AVAILABLE FREE AGENTS"
-            if position:
-                result += f" (Position: {position})"
-            result += "**\n"
-            result += "="*70 + "\n"
+            result += "="*75 + "\n"
+            result += f"🏀 **TOP {len(available)} AVAILABLE FREE AGENTS**\n"
+            result += "="*75 + "\n"
             result += "✨ *Rankings intelligently adjusted using real-time ESPN injury data*\n\n"
             
             for i, player in enumerate(available, 1):
                 pos_str = "/".join(player["positions"])
-                result += f"{i}. **{player['name']}** ({pos_str}) - {player['team']}"
+                result += f"{i}. **{player['name']}** ({pos_str}) - {player['team']}\n"
                 
                 if player['fantasy_score'] > 0:
                     season_label = player.get('season_used', current_season)
-                    result += f"\n   📊 {season_label} Stats: {player['ppg']:.1f} PPG, {player['rpg']:.1f} RPG, {player['apg']:.1f} APG"
+                    result += f"📊 {season_label} Stats: {player['ppg']:.1f} PPG, {player['rpg']:.1f} RPG, {player['apg']:.1f} APG\n"
                     
                     # Show original score if injury penalty was applied
                     if player.get('original_score') and player.get('injury_penalty'):
                         original = player['original_score']
                         adjusted = player['fantasy_score']
-                        result += f"\n   ⭐ Fantasy Score: {original:.1f} → **{adjusted:.1f}** (injury-adjusted)"
+                        result += f"⭐ Fantasy Score: {adjusted:.1f}\n"
                     else:
-                        result += f"\n   ⭐ Fantasy Score: {player['fantasy_score']:.1f}"
+                        result += f"⭐ Fantasy Score: {player['fantasy_score']:.1f}\n"
                 else:
-                    result += f"\n   ⚠️ No stats available"
+                    result += f"⚠️  No stats available\n"
                 
                 # Show ESPN injury details with clear explanation
                 if player.get('espn_injury'):
                     espn_injury = player['espn_injury']
                     injury_type = espn_injury.get('injury', 'Unknown')
                     game_status = espn_injury.get('game_status', 'Unknown')
-                    result += f"\n   📰 **ESPN Report:** {game_status} - {injury_type}"
                     
-                    # Show injury penalty explanation
-                    if player.get('injury_penalty'):
-                        result += f"\n   🚨 **Risk Assessment:** {player['injury_penalty']}"
+                    # Only show if actually injured
+                    if game_status and game_status.lower() not in ['healthy', 'active', '']:
+                        result += f"🏥 Sleeper Status: {player['injury_status']}\n"
                 
                 # Show Sleeper injury status (if no ESPN data but Sleeper has injury)
                 elif player["injury_status"] not in ["Healthy", "ACT", "", "None"]:
-                    result += f"\n   🏥 Sleeper Status: {player['injury_status']}"
+                    result += f"🏥 Sleeper Status: {player['injury_status']}\n"
                 
-                result += "\n\n"
+                result += "\n"
             
-            # Add comprehensive explanation section
-            result += "\n" + "="*60 + "\n"
-            result += "💡 **HOW THESE RANKINGS WORK:**\n"
-            result += "="*60 + "\n\n"
-            result += f"**Step 1: Calculate Base Fantasy Score** ({current_season} season stats)\n"
-            result += "• Formula: PTS + (1.2 × REB) + (1.5 × AST) + (3 × STL) + (3 × BLK) - TOV\n"
-            result += "• Example: Player with 20 PPG, 5 RPG, 7 APG = 20 + 6 + 10.5 = 36.5 points\n"
-            result += "• **Want to see a real calculation?** Ask me to show a specific player's last game!\n\n"
-            result += "**Step 2: Apply ESPN Injury Adjustments**\n"
-            result += "• 🚨 **Out**: -70% penalty (major risk, unlikely to play soon)\n"
-            result += "• ⚠️ **Doubtful**: -40% penalty (moderate risk, probably won't play)\n"
-            result += "• ⚡ **Questionable**: -15% penalty (minor risk, game-time decision)\n"
-            result += "• ❌ **Season-Ending**: Completely removed from recommendations\n\n"
-            result += "**Step 3: Re-rank by Adjusted Scores**\n"
-            result += "• Healthy players rise to the top\n"
-            result += "• Injured players drop based on severity\n"
-            result += "• You see BOTH original and adjusted scores for transparency\n\n"
-            result += "**Data Sources:**\n"
-            result += f"• NBA Stats: {current_season} season (official NBA API)\n"
-            result += "• Injury Reports: ESPN.com (updated throughout the day)\n"
-            result += "• This ensures you get the most current, accurate recommendations!\n\n"
+            # Add concise explanation footer
+            result += "="*75 + "\n"
+            result += "💡 **Fantasy Score Formula:** PTS + (1.2 × REB) + (1.5 × AST) + (3 × STL) + (3 × BLK) - TOV\n"
+            result += f"� **Data Source:** {current_season} NBA Stats + Real-time ESPN Injury Reports\n"
+            result += "="*75 + "\n"
             result += "<TOOL_OUTPUT_END>\n"
             
             logger.info(f"Free agent search output length: {len(result)} chars")
