@@ -10,6 +10,7 @@ import RosterDisplay from './components/RosterDisplay.jsx'
 import RosterChat from './components/RosterChat.jsx'
 import TradeAssistant from './components/TradeAssistant.jsx'
 import SleeperRoute from './components/SleeperRoute.jsx'
+import UnderConstruction from './components/UnderConstruction.jsx'
 
 // Component to handle Sleeper-based routing
 const AppRoutes = () => {
@@ -93,6 +94,9 @@ const AppRoutes = () => {
           </div>
         } 
       />
+
+      {/* Under Construction page */}
+      <Route path="/under-construction" element={<UnderConstruction />} />
 
       {/* Default redirect */}
       <Route 

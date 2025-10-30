@@ -31,6 +31,8 @@ class RosterRankingService:
             cached = self.redis_service.get_json(cache_key)
             if cached:
                 logger.info(f"Roster rankings cache hit for league {league_id}")
+                # Sanitize cached data to fix any None values
+                cached = self._sanitize_rankings_data(cached)
                 cached['cached'] = True
                 return cached
         logger.info(f"Calculating roster rankings for league {league_id}")
@@ -548,3 +550,26 @@ class RosterRankingService:
             'injured_players': injured_names,
             'injured_count': injured_count
         }
+
+    def _sanitize_rankings_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Sanitize cached rankings data to fix None values that cause validation errors.
+        This is a migration helper for old cached data.
+        """
+        if not data or 'rankings' not in data:
+            return data
+        
+        for ranking in data['rankings']:
+            if 'player_breakdown' in ranking:
+                for player in ranking['player_breakdown']:
+                    # Fix None team values
+                    if player.get('team') is None:
+                        player['team'] = 'FA'
+                    # Fix None position values
+                    if player.get('position') is None:
+                        player['position'] = 'N/A'
+                    # Fix None name values (shouldn't happen but be safe)
+                    if player.get('name') is None:
+                        player['name'] = 'Unknown'
+        
+        return data
