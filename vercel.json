@@ -3,12 +3,6 @@
   "outputDirectory": "frontend/dist",
   "installCommand": "cd frontend && npm install",
   "framework": null,
-  "crons": [
-    {
-      "path": "/api/warmup",
-      "schedule": "*/5 * * * *"
-    }
-  ],
   "rewrites": [
     {
       "source": "/(.*)",
