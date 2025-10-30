@@ -1,6 +1,14 @@
 [phases.setup]
 nixPkgs = ["python312"]
 
+[phases.install]
+cmds = [
+  "cd backend",
+  "pip install --upgrade pip",
+  "pip install -r requirements.txt",
+  "pip list | grep -i apscheduler || echo 'APScheduler not installed!'"
+]
+
 [variables]
 PYTHONPATH = "/app"
 
