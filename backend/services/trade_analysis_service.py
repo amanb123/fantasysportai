@@ -449,7 +449,7 @@ class TradeAnalysisService:
             if self.nba_stats_service:
                 # Get player career stats from nba_stats_service
                 # This returns per-game averages for the current season
-                stats = await self.nba_stats_service.get_player_career_stats(player_name)
+                stats = await self.nba_stats_service.fetch_player_career_stats(player_name)
                 
                 if stats and len(stats) > 0:
                     # Get most recent season (first in list)
@@ -484,25 +484,7 @@ class TradeAnalysisService:
             today = datetime.now().date()
             end_date = today + timedelta(days=7)
             
-            # Try NBA MCP first if available
-            if self.nba_mcp_service:
-                schedule = await self.nba_mcp_service.get_schedule_for_date_range(
-                    start_date=today,
-                    end_date=end_date
-                )
-                
-                # Count games for this team
-                team_games = [
-                    game for game in schedule
-                    if game.get("HOME_TEAM_ABBREVIATION") == team_abbr
-                    or game.get("VISITOR_TEAM_ABBREVIATION") == team_abbr
-                    or game.get("home_team_tricode") == team_abbr
-                    or game.get("away_team_tricode") == team_abbr
-                ]
-                
-                return len(team_games)
-            
-            # Fallback to nba_cache_service if available
+            # Use nba_cache_service if available
             if self.nba_cache_service:
                 # Get all games for current season
                 schedule = await self.nba_cache_service.get_full_season_schedule()
