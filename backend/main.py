@@ -56,7 +56,7 @@ from backend.session.models import UserModel
 from datetime import timedelta
 from fastapi.security import OAuth2PasswordRequestForm
 
-# Background scheduler
+# Background scheduler - APScheduler for automated cache warmup
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
