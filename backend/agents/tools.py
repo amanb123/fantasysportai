@@ -254,7 +254,7 @@ class RosterAdvisorTools:
             current_season = f"{season_year}-{str(season_year + 1)[-2:]}"  # e.g., "2025-26"
             logger.info(f"Free agent search using current NBA season: {current_season}")
             
-            # Filter available players
+            # Filter available players (quick first pass - no API calls)
             available = []
             for player_id, player_info in all_players.items():
                 # Skip if rostered
@@ -281,83 +281,114 @@ class RosterAdvisorTools:
                     "ppg": 0.0,
                     "rpg": 0.0,
                     "apg": 0.0,
-                    "fantasy_score": 0.0
+                    "fantasy_score": 0.0,
+                    "player_info": player_info  # Keep for stats fetching
                 }
                 
-                # Try to get stats to make informed recommendations
-                if self.nba_stats:
-                    try:
-                        # Match to NBA ID
-                        player_info_with_id = player_info.copy()
-                        player_info_with_id["player_id"] = player_id
-                        nba_person_id = self.nba_stats.match_sleeper_to_nba_id(player_info_with_id)
-                        logger.debug(f"Matched {player_data['name']} to NBA ID: {nba_person_id}")
-                        
-                        if nba_person_id:
-                            # Get career stats to check game counts
-                            career_stats_dict = await self.nba_stats.fetch_player_career_stats(nba_person_id)
-                            
-                            selected_season_stats = None
-                            season_used = current_season
-                            
-                            if career_stats_dict and isinstance(career_stats_dict, dict):
-                                # Get regular season stats list
-                                career_stats = career_stats_dict.get('regular_season', [])
-                                logger.debug(f"Career stats for {player_data['name']}: {len(career_stats)} seasons")
-                                
-                                # Check current season (2025-26) first
-                                current_season_stats = next(
-                                    (s for s in career_stats if s.get('season') == current_season),
-                                    None
-                                )
-                                
-                                # If current season has 25+ games, use it
-                                if current_season_stats and current_season_stats.get('games', 0) >= 25:
-                                    selected_season_stats = current_season_stats
-                                    season_used = current_season
-                                else:
-                                    # Fall back to previous season (2024-25)
-                                    previous_season = f"{season_year - 1}-{str(season_year)[-2:]}"
-                                    previous_season_stats = next(
-                                        (s for s in career_stats if s.get('season') == previous_season),
-                                        None
-                                    )
-                                    
-                                    if previous_season_stats and previous_season_stats.get('games', 0) >= 25:
-                                        selected_season_stats = previous_season_stats
-                                        season_used = previous_season
-                                    elif previous_season_stats:
-                                        # Use previous season even with < 25 games if it's all we have
-                                        selected_season_stats = previous_season_stats
-                                        season_used = previous_season
-                                    elif current_season_stats:
-                                        # Use current season as last resort
-                                        selected_season_stats = current_season_stats
-                                        season_used = current_season
-                            
-                            if selected_season_stats:
-                                ppg = selected_season_stats.get('ppg', 0)
-                                rpg = selected_season_stats.get('rpg', 0)
-                                apg = selected_season_stats.get('apg', 0)
-                                spg = selected_season_stats.get('spg', 0)
-                                bpg = selected_season_stats.get('bpg', 0)
-                                tov = selected_season_stats.get('tov', 0)
-                                
-                                player_data['ppg'] = ppg
-                                player_data['rpg'] = rpg
-                                player_data['apg'] = apg
-                                player_data['season_used'] = season_used
-                                
-                                # Calculate fantasy score (same formula as simulation)
-                                player_data['fantasy_score'] = ppg + (1.2 * rpg) + (1.5 * apg) + (3 * spg) + (3 * bpg) - tov
-                                logger.info(f"✅ {player_data['name']}: {ppg:.1f} PPG, {rpg:.1f} RPG, {apg:.1f} APG (Fantasy: {player_data['fantasy_score']:.1f}) from {season_used}")
-                    except Exception as stat_error:
-                        logger.warning(f"Could not fetch stats for {player_data['name']}: {stat_error}")
-                        import traceback
-                        logger.debug(f"Traceback: {traceback.format_exc()}")
-                        # Continue without stats
-                
                 available.append(player_data)
+            
+            if not available:
+                pos_text = f" at {position}" if position else ""
+                return f"No available players found{pos_text}."
+            
+            logger.info(f"Found {len(available)} available players, fetching stats in parallel...")
+            
+            # Fetch NBA stats for ALL players in PARALLEL (much faster!)
+            if self.nba_stats:
+                async def fetch_player_stats(player_data):
+                    """Fetch stats for a single player"""
+                    try:
+                        player_info_with_id = player_data['player_info'].copy()
+                        player_info_with_id["player_id"] = player_data['player_id']
+                        nba_person_id = self.nba_stats.match_sleeper_to_nba_id(player_info_with_id)
+                        
+                        if not nba_person_id:
+                            return None
+                        
+                        # Get career stats
+                        career_stats_dict = await self.nba_stats.fetch_player_career_stats(nba_person_id)
+                        
+                        if not career_stats_dict or not isinstance(career_stats_dict, dict):
+                            return None
+                        
+                        # Get regular season stats list
+                        career_stats = career_stats_dict.get('regular_season', [])
+                        
+                        # Check current season first
+                        current_season_stats = next(
+                            (s for s in career_stats if s.get('season') == current_season),
+                            None
+                        )
+                        
+                        # Select best season to use
+                        selected_season_stats = None
+                        season_used = current_season
+                        
+                        if current_season_stats and current_season_stats.get('games', 0) >= 25:
+                            selected_season_stats = current_season_stats
+                            season_used = current_season
+                        else:
+                            # Fall back to previous season
+                            previous_season = f"{season_year - 1}-{str(season_year)[-2:]}"
+                            previous_season_stats = next(
+                                (s for s in career_stats if s.get('season') == previous_season),
+                                None
+                            )
+                            
+                            if previous_season_stats and previous_season_stats.get('games', 0) >= 25:
+                                selected_season_stats = previous_season_stats
+                                season_used = previous_season
+                            elif previous_season_stats:
+                                selected_season_stats = previous_season_stats
+                                season_used = previous_season
+                            elif current_season_stats:
+                                selected_season_stats = current_season_stats
+                                season_used = current_season
+                        
+                        if selected_season_stats:
+                            return {
+                                'ppg': selected_season_stats.get('ppg', 0),
+                                'rpg': selected_season_stats.get('rpg', 0),
+                                'apg': selected_season_stats.get('apg', 0),
+                                'spg': selected_season_stats.get('spg', 0),
+                                'bpg': selected_season_stats.get('bpg', 0),
+                                'tov': selected_season_stats.get('tov', 0),
+                                'season_used': season_used
+                            }
+                        
+                        return None
+                    except Exception as e:
+                        logger.debug(f"Error fetching stats for {player_data['name']}: {e}")
+                        return None
+                
+                # Fetch all stats in parallel!
+                stats_tasks = [fetch_player_stats(player) for player in available]
+                stats_results = await asyncio.gather(*stats_tasks, return_exceptions=True)
+                
+                # Apply stats to players
+                for player, stats in zip(available, stats_results):
+                    if stats and not isinstance(stats, Exception) and isinstance(stats, dict):
+                        player['ppg'] = stats['ppg']
+                        player['rpg'] = stats['rpg']
+                        player['apg'] = stats['apg']
+                        player['season_used'] = stats['season_used']
+                        
+                        # Calculate fantasy score
+                        player['fantasy_score'] = (
+                            stats['ppg'] + 
+                            (1.2 * stats['rpg']) + 
+                            (1.5 * stats['apg']) + 
+                            (3 * stats['spg']) + 
+                            (3 * stats['bpg']) - 
+                            stats['tov']
+                        )
+                        logger.info(f"✅ {player['name']}: {stats['ppg']:.1f} PPG, {stats['rpg']:.1f} RPG, {stats['apg']:.1f} APG (Fantasy: {player['fantasy_score']:.1f}) from {stats['season_used']}")
+                
+                logger.info(f"Fetched stats for {sum(1 for p in available if p['fantasy_score'] > 0)} players")
+            
+            # Clean up player_info from data (no longer needed)
+            for player in available:
+                player.pop('player_info', None)
             
             if not available:
                 pos_text = f" at {position}" if position else ""
