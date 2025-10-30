@@ -453,57 +453,39 @@ class RosterAdvisorTools:
             # Sort by adjusted fantasy score (descending) to show best players first
             available = sorted(available, key=lambda x: x["fantasy_score"], reverse=True)[:limit]
             
-            # Format results with stats and news - Use XML markers to prevent LLM summarization
-            result = "\n<TOOL_OUTPUT_START - DO NOT MODIFY OR SUMMARIZE - DISPLAY EXACTLY AS IS>\n\n"
-            result += "="*75 + "\n"
-            result += f"🏀 **TOP {len(available)} AVAILABLE FREE AGENTS**\n"
-            result += "="*75 + "\n"
-            result += "✨ *Rankings intelligently adjusted using real-time ESPN injury data*\n\n"
+            # Format results as clean text without excessive formatting
+            result = f"\nTOP {len(available)} AVAILABLE FREE AGENTS\n"
+            result += f"Rankings adjusted using real-time ESPN injury data\n\n"
             
             for i, player in enumerate(available, 1):
                 pos_str = "/".join(player["positions"])
-                result += f"{i}. **{player['name']}** ({pos_str}) - {player['team']}\n"
+                result += f"{i}. {player['name']} ({pos_str}) - {player['team']}\n"
                 
                 if player['fantasy_score'] > 0:
                     season_label = player.get('season_used', current_season)
-                    result += f"📊 {season_label} Stats: {player['ppg']:.1f} PPG, {player['rpg']:.1f} RPG, {player['apg']:.1f} APG\n"
-                    
-                    # Show original score if injury penalty was applied
-                    if player.get('original_score') and player.get('injury_penalty'):
-                        original = player['original_score']
-                        adjusted = player['fantasy_score']
-                        result += f"⭐ Fantasy Score: {adjusted:.1f}\n"
-                    else:
-                        result += f"⭐ Fantasy Score: {player['fantasy_score']:.1f}\n"
+                    result += f"   {season_label} Stats: {player['ppg']:.1f} PPG, {player['rpg']:.1f} RPG, {player['apg']:.1f} APG\n"
+                    result += f"   Fantasy Score: {player['fantasy_score']:.1f}\n"
                 else:
-                    result += f"⚠️  No stats available\n"
+                    result += f"   No stats available\n"
                 
-                # Show ESPN injury details with clear explanation
+                # Show injury status if applicable
                 if player.get('espn_injury'):
                     espn_injury = player['espn_injury']
-                    injury_type = espn_injury.get('injury', 'Unknown')
                     game_status = espn_injury.get('game_status', 'Unknown')
                     
                     # Only show if actually injured
                     if game_status and game_status.lower() not in ['healthy', 'active', '']:
-                        result += f"🏥 Sleeper Status: {player['injury_status']}\n"
+                        result += f"   Injury Status: {player['injury_status']}\n"
                 
                 # Show Sleeper injury status (if no ESPN data but Sleeper has injury)
                 elif player["injury_status"] not in ["Healthy", "ACT", "", "None"]:
-                    result += f"🏥 Sleeper Status: {player['injury_status']}\n"
+                    result += f"   Injury Status: {player['injury_status']}\n"
                 
                 result += "\n"
             
-            # Add concise explanation footer
-            result += "="*75 + "\n"
-            result += "💡 **Fantasy Score Formula:** PTS + (1.2 × REB) + (1.5 × AST) + (3 × STL) + (3 × BLK) - TOV\n"
-            result += f"� **Data Source:** {current_season} NBA Stats + Real-time ESPN Injury Reports\n"
-            result += "="*75 + "\n"
-            result += "<TOOL_OUTPUT_END>\n"
-            
-            logger.info(f"Free agent search output length: {len(result)} chars")
-            logger.info(f"Output starts with: {result[:200]}")
-            logger.info(f"Output ends with: {result[-200:]}")
+            # Add note about scoring
+            result += f"\nNote: Fantasy scores based on {current_season} stats with formula:\n"
+            result += "PTS + (1.2 × REB) + (1.5 × AST) + (3 × STL) + (3 × BLK) - TOV\n"
             
             return result
             
