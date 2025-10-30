@@ -234,8 +234,8 @@ class RosterRankingService:
             # Store player breakdown for tooltip/hover
             player_breakdown.append({
                 'name': player_name,
-                'position': player.get('position', 'N/A'),
-                'team': player.get('team', 'N/A'),
+                'position': player.get('position') or 'N/A',
+                'team': player.get('team') or 'FA',  # Handle None values
                 'total_points': round(player_total, 2),
                 'category_contributions': {k: round(v, 2) for k, v in cat_scores.items() if abs(v) > 0.01},
                 'games_played': games_played,
