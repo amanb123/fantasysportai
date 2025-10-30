@@ -56,12 +56,19 @@ from backend.session.models import UserModel
 from datetime import timedelta
 from fastapi.security import OAuth2PasswordRequestForm
 
+# Background scheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# Initialize scheduler
+scheduler = AsyncIOScheduler()
 
 async def initialize_player_cache(player_cache_service):
     """Background task to initialize player cache on startup."""
@@ -75,6 +82,40 @@ async def initialize_player_cache(player_cache_service):
             logger.error(f"❌ Player cache initialization failed: {error_message}")
     except Exception as e:
         logger.error(f"❌ Player cache initialization error: {e}")
+
+
+async def warmup_cache_job():
+    """
+    Background job to keep cache warm.
+    Runs every 5 minutes to prevent cold starts and maintain cache.
+    """
+    try:
+        logger.info("🔄 [CRON] Running scheduled cache warmup...")
+        
+        # Check and initialize player cache if needed
+        player_cache_service = get_player_cache_service()
+        if player_cache_service:
+            cache_stats = player_cache_service.get_cache_stats()
+            logger.info(f"[CRON] Player cache status: {cache_stats.get('is_valid')} ({cache_stats.get('player_count', 0)} players, TTL: {cache_stats.get('ttl_remaining', 0)}s)")
+            
+            if not cache_stats.get("is_valid"):
+                logger.info("[CRON] Player cache invalid, initializing...")
+                import asyncio
+                asyncio.create_task(initialize_player_cache(player_cache_service))
+        
+        # Check Redis connection
+        redis_service = get_redis_service()
+        if redis_service and redis_service.is_connected():
+            logger.info("[CRON] Redis: Connected ✅")
+        else:
+            logger.warning("[CRON] Redis: Disconnected ⚠️")
+        
+        logger.info("✅ [CRON] Cache warmup job completed successfully")
+    except Exception as e:
+        logger.error(f"❌ [CRON] Cache warmup job failed: {e}")
+        import traceback
+        logger.error(f"[CRON] Traceback: {traceback.format_exc()}")
+
 
 
 @asynccontextmanager
@@ -161,6 +202,27 @@ async def lifespan(app: FastAPI):
         trade_session_manager = TradeSessionManager(repository)
         logger.info("Trade session manager initialized")
         
+        # Start background scheduler for cache warmup
+        try:
+            scheduler.add_job(
+                warmup_cache_job,
+                CronTrigger.from_crontab('*/5 * * * *'),  # Every 5 minutes
+                id='cache_warmup',
+                name='Cache Warmup Job',
+                replace_existing=True,
+                max_instances=1  # Prevent overlapping runs
+            )
+            
+            scheduler.start()
+            logger.info("🚀 Background scheduler started - Cache warmup every 5 minutes")
+            
+            # Run once immediately on startup
+            import asyncio
+            asyncio.create_task(warmup_cache_job())
+        except Exception as scheduler_error:
+            logger.error(f"Failed to start scheduler: {scheduler_error}")
+            logger.warning("Continuing without scheduled cache warmup")
+        
     except Exception as e:
         logger.error(f"Failed to initialize application: {e}")
         raise
@@ -169,6 +231,13 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("🛑 Shutting down Fantasy Basketball League API")
+    
+    # Shutdown scheduler
+    try:
+        scheduler.shutdown(wait=False)
+        logger.info("Background scheduler stopped")
+    except Exception as e:
+        logger.warning(f"Error stopping scheduler: {e}")
     
     # Close Redis connection
     try:
