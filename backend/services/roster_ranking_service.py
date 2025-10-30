@@ -48,14 +48,35 @@ class RosterRankingService:
         else:
             logger.info(f"Using scoring settings with {len(scoring_settings)} categories for league {league_id}")
         
-        rosters = await self.sleeper_service.get_league_rosters(league_id)
-        if not rosters:
-            logger.error(f"No rosters found for league {league_id}")
-            raise ValueError(f"No rosters found for league {league_id}")
+        # Use a single async context manager for all Sleeper API calls
+        async with self.sleeper_service as sleeper:
+            # Fetch rosters
+            rosters = await sleeper.get_league_rosters(league_id)
+            
+            if not rosters:
+                error_msg = f"No rosters found for league {league_id}. This could mean: 1) Invalid league ID, 2) League has no rosters yet, 3) Sleeper API is down, or 4) Network connectivity issue"
+                logger.error(error_msg)
+                
+                # Try to fetch league details to verify the league exists
+                try:
+                    league_info = await sleeper.get_league(league_id)
+                    if league_info:
+                        logger.info(f"League exists: {league_info.get('name')}, but has no rosters")
+                    else:
+                        logger.error(f"League {league_id} does not exist or is not accessible")
+                except Exception as verify_err:
+                    logger.error(f"Could not verify league existence: {verify_err}")
+                
+                raise ValueError(error_msg)
+            
+            logger.info(f"Found {len(rosters)} rosters for league {league_id}")
+            
+            # Fetch users
+            users_list = await sleeper.get_league_users(league_id)
+            
+            # Fetch all player data
+            all_players = await sleeper.get_all_players()
         
-        logger.info(f"Found {len(rosters)} rosters for league {league_id}")
-        
-        users_list = await self.sleeper_service.get_league_users(league_id)
         # Convert users list to dictionary mapping user_id -> display_name
         users = {}
         if users_list:
@@ -66,8 +87,6 @@ class RosterRankingService:
         
         logger.info(f"Found {len(users)} users for league {league_id}")
         
-        # Get all player data for detailed info
-        all_players = await self.sleeper_service.get_all_players()
         if not all_players:
             logger.error("Failed to fetch player data from Sleeper")
             raise ValueError("Failed to fetch player data from Sleeper")

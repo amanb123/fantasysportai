@@ -258,14 +258,25 @@ class SleeperService:
             
             response = await self.client.get(f"/league/{league_id}/rosters")
             
+            logger.info(f"Sleeper API response status: {response.status_code}")
+            
             if response.status_code == 404:
-                logger.warning(f"League not found: {league_id}")
+                logger.warning(f"League not found: {league_id} (404 response)")
+                return None
+            
+            if response.status_code != 200:
+                logger.error(f"Unexpected status code {response.status_code} for league {league_id}")
+                logger.error(f"Response body: {response.text[:500]}")
                 return None
             
             response.raise_for_status()
             rosters_data = response.json()
             
-            logger.info(f"Retrieved {len(rosters_data)} rosters for league {league_id}")
+            if not rosters_data:
+                logger.warning(f"Empty rosters list returned for league {league_id}")
+            else:
+                logger.info(f"Retrieved {len(rosters_data)} rosters for league {league_id}")
+            
             return rosters_data
             
         except httpx.TimeoutException:
@@ -276,6 +287,8 @@ class SleeperService:
             return None
         except Exception as e:
             logger.error(f"Unexpected error fetching rosters for league {league_id}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
 
     async def get_current_nba_season(self) -> str:
