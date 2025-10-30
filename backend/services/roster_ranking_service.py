@@ -554,12 +554,17 @@ class RosterRankingService:
     def _sanitize_rankings_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Sanitize cached rankings data to fix None values that cause validation errors.
+        Also recalculates win/loss bonuses if they're missing (for backward compatibility).
         This is a migration helper for old cached data.
         """
         if not data or 'rankings' not in data:
             return data
         
+        WIN_BONUS = 0.10  # 10% bonus per win
+        LOSS_PENALTY = 0.05  # 5% penalty per loss
+        
         for ranking in data['rankings']:
+            # Fix player_breakdown None values
             if 'player_breakdown' in ranking:
                 for player in ranking['player_breakdown']:
                     # Fix None team values
@@ -571,5 +576,36 @@ class RosterRankingService:
                     # Fix None name values (shouldn't happen but be safe)
                     if player.get('name') is None:
                         player['name'] = 'Unknown'
+            
+            # Recalculate win/loss bonuses and total points if needed (backward compatibility)
+            base_points = ranking.get('base_fantasy_points', 0)
+            wins = ranking.get('wins', 0) or 0
+            losses = ranking.get('losses', 0) or 0
+            
+            # Check if we need to recalculate (if bonus fields missing or total == base)
+            total_points = ranking.get('total_fantasy_points', 0)
+            needs_recalc = False
+            
+            if base_points > 0 and (wins > 0 or losses > 0):
+                # If total_fantasy_points equals base_fantasy_points, it wasn't adjusted
+                if abs(total_points - base_points) < 0.01:
+                    needs_recalc = True
+                # Or if bonus fields are missing
+                elif 'win_bonus' not in ranking or 'loss_penalty' not in ranking:
+                    needs_recalc = True
+            
+            if needs_recalc:
+                # Recalculate everything
+                win_multiplier = 1 + (WIN_BONUS * wins) - (LOSS_PENALTY * losses)
+                adjusted_points = base_points * win_multiplier
+                win_bonus_value = base_points * WIN_BONUS * wins if wins > 0 else 0.0
+                loss_penalty_value = base_points * LOSS_PENALTY * losses if losses > 0 else 0.0
+                
+                ranking['total_fantasy_points'] = adjusted_points
+                ranking['win_multiplier'] = win_multiplier
+                ranking['win_bonus'] = win_bonus_value
+                ranking['loss_penalty'] = loss_penalty_value
+                
+                logger.info(f"Recalculated for roster {ranking.get('roster_id')}: base={base_points:.2f}, adjusted={adjusted_points:.2f}, win_bonus={win_bonus_value:.2f}")
         
         return data
