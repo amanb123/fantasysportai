@@ -268,6 +268,77 @@ async def health_check(repository: BasketballRepository = Depends(get_basketball
     )
 
 
+@app.get("/api/warmup", tags=["Health"])
+async def warmup_cache():
+    """
+    Cache warmup endpoint for Vercel cron jobs.
+    Keeps the application alive and ensures caches are initialized.
+    This endpoint is called every 5 minutes by Vercel cron to:
+    1. Prevent cold starts
+    2. Keep player cache warm
+    3. Ensure Redis connections stay alive
+    """
+    try:
+        warmup_status = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "status": "warming",
+            "services": {}
+        }
+        
+        # Check Redis connection
+        redis_service = get_redis_service()
+        if redis_service and redis_service.is_connected():
+            warmup_status["services"]["redis"] = "connected"
+        else:
+            warmup_status["services"]["redis"] = "disconnected"
+        
+        # Check and warm player cache
+        player_cache_service = get_player_cache_service()
+        if player_cache_service:
+            cache_stats = player_cache_service.get_cache_stats()
+            warmup_status["services"]["player_cache"] = {
+                "status": "valid" if cache_stats.get("is_valid", False) else "invalid",
+                "player_count": cache_stats.get("player_count", 0),
+                "ttl_remaining": cache_stats.get("ttl_remaining", 0)
+            }
+            
+            # If cache is invalid or expired, trigger initialization
+            if not cache_stats.get("is_valid", False):
+                logger.info("Warmup: Player cache invalid, initializing...")
+                import asyncio
+                asyncio.create_task(initialize_player_cache(player_cache_service))
+                warmup_status["services"]["player_cache"]["action"] = "initializing"
+        else:
+            warmup_status["services"]["player_cache"] = "unavailable"
+        
+        # Check Sleeper service
+        sleeper_service = get_sleeper_service()
+        if sleeper_service:
+            warmup_status["services"]["sleeper"] = "available"
+        else:
+            warmup_status["services"]["sleeper"] = "unavailable"
+        
+        # Check NBA stats service
+        nba_stats_service = get_nba_stats_service()
+        if nba_stats_service:
+            warmup_status["services"]["nba_stats"] = "available"
+        else:
+            warmup_status["services"]["nba_stats"] = "unavailable"
+        
+        warmup_status["status"] = "complete"
+        logger.info(f"Cache warmup complete: {warmup_status['services']}")
+        
+        return warmup_status
+        
+    except Exception as e:
+        logger.error(f"Warmup endpoint error: {e}")
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "status": "error",
+            "error": str(e)
+        }
+
+
 # Authentication Endpoints
 
 @app.post("/api/auth/register", response_model=TokenResponse, tags=["Authentication"])
@@ -912,11 +983,11 @@ async def start_roster_chat(
                 
                 # Initialize tools for function calling
                 from backend.agents.tools import ROSTER_ADVISOR_TOOLS, RosterAdvisorTools
-                from backend.dependencies import get_sleeper_service, get_nba_stats_service, get_nba_mcp_service
+                from backend.dependencies import get_sleeper_service, get_nba_stats_service, get_nba_news_service
                 
                 sleeper_service = get_sleeper_service()
                 nba_stats_service = get_nba_stats_service()
-                nba_mcp_service = get_nba_mcp_service() if settings.nba_mcp_enabled else None
+                nba_news_service = get_nba_news_service()
                 
                 tool_executor = RosterAdvisorTools(
                     league_id=request.league_id,
@@ -926,7 +997,7 @@ async def start_roster_chat(
                     player_cache_service=context_builder.player_cache,
                     sleeper_service=sleeper_service,
                     nba_stats_service=nba_stats_service,
-                    nba_mcp_service=nba_mcp_service
+                    nba_news_service=nba_news_service
                 )
                 
                 # Create advisor agent with function calling support
@@ -1078,11 +1149,10 @@ async def send_chat_message(
         
         # Initialize tools for function calling
         from backend.agents.tools import ROSTER_ADVISOR_TOOLS, RosterAdvisorTools
-        from backend.dependencies import get_sleeper_service, get_nba_stats_service, get_nba_mcp_service, get_nba_news_service
+        from backend.dependencies import get_sleeper_service, get_nba_stats_service, get_nba_news_service
         
         sleeper_service = get_sleeper_service()
         nba_stats_service = get_nba_stats_service()
-        nba_mcp_service = get_nba_mcp_service() if settings.nba_mcp_enabled else None
         nba_news_service = get_nba_news_service()
         
         tool_executor = RosterAdvisorTools(
@@ -1093,7 +1163,6 @@ async def send_chat_message(
             player_cache_service=context_builder.player_cache,
             sleeper_service=sleeper_service,
             nba_stats_service=nba_stats_service,
-            nba_mcp_service=nba_mcp_service,
             nba_news_service=nba_news_service
         )
         
@@ -1939,13 +2008,35 @@ async def get_sleeper_players_bulk(
         cached_players = player_cache_service.get_cached_players()
         
         if cached_players is None:
-            # Cache is empty, return empty results with cache status
+            # Cache is empty - trigger initialization and wait briefly
+            logger.warning("Player cache empty, initializing synchronously...")
+            success, error_message = await player_cache_service.fetch_and_cache_players()
+            
+            if success:
+                # Retry getting cached players after initialization
+                cached_players = player_cache_service.get_cached_players()
+                logger.info(f"Player cache initialized successfully with {len(cached_players) if cached_players else 0} players")
+            else:
+                logger.error(f"Failed to initialize player cache: {error_message}")
+                # Return error response with cache status
+                cache_stats = player_cache_service.get_cache_stats()
+                return {
+                    "players": {},
+                    "cache_status": {
+                        "is_valid": False,
+                        "message": f"Player cache initialization failed: {error_message}",
+                        "stats": cache_stats
+                    }
+                }
+        
+        # If still None after initialization attempt, return empty
+        if cached_players is None:
             cache_stats = player_cache_service.get_cache_stats()
             return {
                 "players": {},
                 "cache_status": {
                     "is_valid": False,
-                    "message": "Player cache is empty or unavailable. Please sync the cache first.",
+                    "message": "Player cache is empty or unavailable. Please try again.",
                     "stats": cache_stats
                 }
             }

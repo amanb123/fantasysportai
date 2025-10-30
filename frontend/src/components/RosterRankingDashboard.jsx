@@ -8,76 +8,61 @@ const RosterRankingDashboard = ({ leagueId, hideHeader = false, onDataLoad }) =>
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [hoveredPlayer, setHoveredPlayer] = useState(null);
+  const [loadingMessage, setLoadingMessage] = useState('Initializing...');
 
-  useEffect(() => {
-    let timeoutId = null;
-    let isCancelled = false;
-    
-    const loadRankings = async () => {
-      if (!leagueId) {
-        setError('No league ID provided');
-        setLoading(false);
-        return;
-      }
-      
-      try {
-        setLoading(true);
-        setError(null);
-        
-        // Add timeout to prevent infinite loading
-        timeoutId = setTimeout(() => {
-          if (!isCancelled) {
-            setError('Request timed out. The roster ranking service may be unavailable or taking too long.');
-            setLoading(false);
-          }
-        }, 30000); // 30 second timeout
-        
-        const data = await getRosterRankings(leagueId);
-        
-        if (!isCancelled) {
-          clearTimeout(timeoutId);
-          setRankings(data);
-          if (onDataLoad) {
-            onDataLoad(data);
-          }
-          setLoading(false);
-        }
-      } catch (err) {
-        if (!isCancelled) {
-          clearTimeout(timeoutId);
-          console.error('Failed to load rankings:', err);
-          setError(err.message || 'Failed to load roster rankings');
-          setLoading(false);
-        }
-      }
-    };
-    
-    loadRankings();
-    
-    return () => {
-      isCancelled = true;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    };
-  }, [leagueId, onDataLoad]);
-
+  // Function to load rankings (can be called from useEffect or retry button)
   const loadRankings = async () => {
+    if (!leagueId) {
+      setError('No league ID provided');
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
+      
+      // Progressive loading messages
+      setLoadingMessage('Fetching roster data...');
+      setTimeout(() => setLoadingMessage('Loading NBA player stats...'), 2000);
+      setTimeout(() => setLoadingMessage('Calculating rankings...'), 5000);
+      setTimeout(() => setLoadingMessage('This may take up to 90 seconds...'), 15000);
+      
       const data = await getRosterRankings(leagueId);
+      
       setRankings(data);
       if (onDataLoad) {
         onDataLoad(data);
       }
+      setLoading(false);
+      setLoadingMessage('Initializing...');
     } catch (err) {
       console.error('Failed to load rankings:', err);
-      setError(err.message || 'Failed to load roster rankings');
-    } finally {
+      
+      // User-friendly error messages
+      let errorMessage = 'Failed to load roster rankings';
+      
+      if (err.message?.includes('timeout')) {
+        errorMessage = '⏱️ Request timed out. The ranking service is taking longer than expected. This can happen on the first load. Please try again.';
+      } else if (err.message?.includes('Network Error') || err.message?.includes('ERR_CONNECTION')) {
+        errorMessage = '🔌 Unable to connect to the backend server. Please check your internet connection.';
+      } else if (err.response?.status === 503) {
+        errorMessage = '🚧 The roster ranking service is temporarily unavailable. Please try again in a moment.';
+      } else if (err.response?.status === 500) {
+        errorMessage = '⚠️ Server error while calculating rankings. This may be due to missing player data. Please try again.';
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
       setLoading(false);
+      setLoadingMessage('Initializing...');
     }
   };
+
+  useEffect(() => {
+    loadRankings();
+  }, [leagueId]);
 
   const getRankBadge = (rank) => {
     if (rank === 1) return { emoji: '🥇', color: 'bg-yellow-100 border-yellow-400 text-yellow-800' };
@@ -96,14 +81,30 @@ const RosterRankingDashboard = ({ leagueId, hideHeader = false, onDataLoad }) =>
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center py-8">
+      <div className="flex flex-col justify-center items-center py-12 space-y-4">
         <LoadingSpinner />
+        <div className="text-center">
+          <p className="text-gray-700 font-medium">{loadingMessage}</p>
+          <p className="text-sm text-gray-500 mt-2">
+            First load may take longer as we fetch NBA stats
+          </p>
+        </div>
       </div>
     );
   }
 
   if (error) {
-    return <ErrorMessage message={error} onRetry={loadRankings} />;
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
+        <div className="text-red-800 mb-4 whitespace-pre-line">{error}</div>
+        <button
+          onClick={loadRankings}
+          className="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium"
+        >
+          🔄 Try Again
+        </button>
+      </div>
+    );
   }
 
   if (!rankings || !rankings.rankings || rankings.rankings.length === 0) {

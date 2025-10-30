@@ -84,7 +84,22 @@ const CurrentMatchup = ({ leagueId, rosterId, playerDetails: initialPlayerDetail
             if (allPlayerIds.length > 0) {
               try {
                 const response = await getSleeperPlayersBulk(allPlayerIds)
-                setPlayerDetails(response.players || {})
+                
+                // Check if cache is valid
+                if (response.cache_status && !response.cache_status.is_valid) {
+                  console.warn('Player cache not ready:', response.cache_status.message)
+                  // Retry after a short delay if cache is initializing
+                  setTimeout(async () => {
+                    try {
+                      const retryResponse = await getSleeperPlayersBulk(allPlayerIds)
+                      setPlayerDetails(retryResponse.players || {})
+                    } catch (retryErr) {
+                      console.error('Error fetching player details on retry:', retryErr)
+                    }
+                  }, 3000)
+                } else {
+                  setPlayerDetails(response.players || {})
+                }
               } catch (err) {
                 console.error('Error fetching player details:', err)
                 // Keep existing player details if fetch fails
