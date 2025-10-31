@@ -10,6 +10,7 @@ import logging
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 import json
+import asyncio
 
 from backend.agents.agent_factory import AgentFactory
 from backend.services.sleeper_service import SleeperService
@@ -35,6 +36,10 @@ class TradeAnalysisService:
         self.nba_cache_service = nba_cache_service
         self.sleeper_service = sleeper_service
         self.nba_news_service = nba_news_service
+        
+        # Schedule cache for trade analysis session
+        self._schedule_cache: Optional[List[Dict]] = None
+        self._schedule_cache_date: Optional[datetime] = None
         
         # Log which services are available
         if nba_stats_service:
@@ -366,6 +371,7 @@ class TradeAnalysisService:
     ) -> str:
         """
         Fetch and format player statistics from NBA MCP.
+        Uses parallel processing for faster performance.
         
         Args:
             player_ids: List of Sleeper player IDs
@@ -377,46 +383,94 @@ class TradeAnalysisService:
         if not player_ids:
             return "*No players*"
         
-        lines = []
-        
-        for player_id in player_ids:
+        # Fetch all player data in parallel
+        async def fetch_player_data(player_id: str) -> Dict[str, Any]:
+            """Fetch all data for a single player concurrently."""
             player = all_players.get(player_id, {})
             full_name = player.get("full_name", "Unknown Player")
             position = player.get("position", "N/A")
             team = player.get("team", "FA")
             injury_status = player.get("injury_status", "")
-            
-            # Get ESPN ID for MCP lookup
+            nba_id = player.get("player_id")
             espn_id = player.get("espn_id")
-            nba_id = player.get("player_id")  # Sleeper's NBA player ID
             
-            # Fetch stats
-            try:
-                stats_summary = await self._calculate_roster_stats(
-                    player_name=full_name,
-                    player_id=nba_id or espn_id
-                )
-                upcoming_games = await self._get_upcoming_games_count(team)
-            except Exception as e:
-                logger.warning(f"Could not fetch stats for {full_name}: {e}")
-                stats_summary = "*Stats unavailable*"
-                upcoming_games = 0
+            # Fetch stats and injury news in parallel
+            tasks = []
             
-            # Fetch injury news from ESPN if available
-            injury_news = None
+            # Task 1: Player stats
+            stats_task = self._calculate_roster_stats(
+                player_name=full_name,
+                player_id=nba_id or espn_id
+            )
+            tasks.append(stats_task)
+            
+            # Task 2: Injury news (if service available)
             if self.nba_news_service:
-                try:
-                    injury_news = await self.nba_news_service.check_injury_status(full_name)
-                except Exception as e:
-                    logger.debug(f"Could not fetch injury news for {full_name}: {e}")
+                injury_task = self.nba_news_service.check_injury_status(full_name)
+                tasks.append(injury_task)
+            else:
+                tasks.append(asyncio.sleep(0))  # Placeholder
+            
+            # Execute in parallel
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            stats_summary = results[0] if not isinstance(results[0], Exception) else "*Stats unavailable*"
+            injury_news = results[1] if len(results) > 1 and not isinstance(results[1], Exception) else None
+            
+            return {
+                "full_name": full_name,
+                "position": position,
+                "team": team,
+                "injury_status": injury_status,
+                "stats_summary": stats_summary,
+                "injury_news": injury_news
+            }
+        
+        # Fetch all players in parallel
+        logger.info(f"Fetching data for {len(player_ids)} players in parallel...")
+        player_data_list = await asyncio.gather(
+            *[fetch_player_data(pid) for pid in player_ids],
+            return_exceptions=True
+        )
+        
+        # Get all unique teams for schedule fetching
+        teams = list(set([
+            player_data.get("team") 
+            for player_data in player_data_list 
+            if isinstance(player_data, dict) and player_data.get("team") and player_data.get("team") != "FA"
+        ]))
+        
+        # Fetch upcoming games for all teams in parallel
+        logger.info(f"Fetching upcoming games for {len(teams)} teams in parallel...")
+        upcoming_games_map = {}
+        if teams:
+            games_results = await asyncio.gather(
+                *[self._get_upcoming_games_count(team) for team in teams],
+                return_exceptions=True
+            )
+            for team, games_count in zip(teams, games_results):
+                if not isinstance(games_count, Exception):
+                    upcoming_games_map[team] = games_count
+        
+        # Format results
+        lines = []
+        for i, player_data in enumerate(player_data_list):
+            if isinstance(player_data, Exception):
+                logger.error(f"Error fetching player data: {player_data}")
+                lines.append(f"### Unknown Player - Error loading data")
+                continue
+            
+            # Get upcoming games from the map
+            upcoming_games = upcoming_games_map.get(player_data["team"], 0)
             
             # Format player section
-            status_tag = f" **({injury_status})**" if injury_status else ""
-            lines.append(f"### {full_name} - {position} - {team}{status_tag}")
+            status_tag = f" **({player_data['injury_status']})**" if player_data['injury_status'] else ""
+            lines.append(f"### {player_data['full_name']} - {player_data['position']} - {player_data['team']}{status_tag}")
             lines.append(f"**Upcoming Games (Next 7 Days):** {upcoming_games}")
-            lines.append(stats_summary)
+            lines.append(player_data['stats_summary'])
             
             # Add injury news if available (must be a dict, not a string)
+            injury_news = player_data.get('injury_news')
             if injury_news and isinstance(injury_news, dict):
                 lines.append(f"\n**Latest News (ESPN):**")
                 lines.append(f"- **Status:** {injury_news.get('status', 'Unknown')}")
@@ -470,6 +524,7 @@ class TradeAnalysisService:
     async def _get_upcoming_games_count(self, team_abbr: str) -> int:
         """
         Get count of upcoming games in next 7 days using NBA cache service.
+        Uses instance-level schedule caching to avoid redundant API calls.
         
         Args:
             team_abbr: Team abbreviation (e.g., "LAL")
@@ -486,11 +541,18 @@ class TradeAnalysisService:
             
             # Use nba_cache_service if available
             if self.nba_cache_service:
-                # Get cached schedule
-                schedule = await self.nba_cache_service.get_cached_schedule(
-                    start_date=str(today),
-                    end_date=str(end_date)
-                )
+                # Fetch schedule once and cache it for this trade analysis
+                if self._schedule_cache is None or self._schedule_cache_date != today:
+                    logger.info("Fetching schedule for trade analysis (will be cached)")
+                    self._schedule_cache = await self.nba_cache_service.get_cached_schedule(
+                        start_date=str(today),
+                        end_date=str(end_date)
+                    )
+                    self._schedule_cache_date = today
+                else:
+                    logger.debug("Using cached schedule for trade analysis")
+                
+                schedule = self._schedule_cache
                 
                 # Filter for upcoming games in next 7 days for this team
                 team_games = []
