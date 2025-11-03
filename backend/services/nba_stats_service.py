@@ -25,6 +25,10 @@ class NBAStatsService:
         self.historical_cache_ttl = settings.NBA_HISTORICAL_STATS_CACHE_TTL
         self.historical_cache_prefix = settings.NBA_HISTORICAL_STATS_CACHE_KEY_PREFIX
         # Don't store client - create per request for concurrency safety
+        
+        # Request deduplication: prevent duplicate concurrent fetches
+        self._in_flight_requests: Dict[str, asyncio.Task] = {}
+        self._request_lock = asyncio.Lock()
     
     async def __aenter__(self):
         """Async context manager entry - no-op for backward compatibility."""
@@ -465,12 +469,43 @@ class NBAStatsService:
     async def fetch_player_career_stats(self, nba_person_id: int) -> Optional[Dict]:
         """
         Fetch career stats for a player using nba_api.
+        Uses request deduplication to prevent duplicate concurrent fetches.
         
         Args:
             nba_person_id: NBA person ID
             
         Returns:
             Dict with regular_season and playoffs career stats or None on error
+        """
+        cache_key_request = f"career:{nba_person_id}"
+        
+        # Check if this request is already in flight
+        async with self._request_lock:
+            if cache_key_request in self._in_flight_requests:
+                logger.info(f"Waiting for in-flight request for player {nba_person_id}")
+                # Wait for the existing request to complete
+                try:
+                    return await self._in_flight_requests[cache_key_request]
+                except Exception as e:
+                    logger.error(f"In-flight request failed for player {nba_person_id}: {e}")
+                    return None
+            
+            # Create new task for this request
+            task = asyncio.create_task(self._fetch_player_career_stats_impl(nba_person_id))
+            self._in_flight_requests[cache_key_request] = task
+        
+        try:
+            result = await task
+            return result
+        finally:
+            # Clean up completed request
+            async with self._request_lock:
+                self._in_flight_requests.pop(cache_key_request, None)
+    
+    async def _fetch_player_career_stats_impl(self, nba_person_id: int) -> Optional[Dict]:
+        """
+        Internal implementation of fetch_player_career_stats.
+        This is the actual fetch logic, wrapped by deduplication layer.
         """
         try:
             # Check cache first
@@ -490,15 +525,21 @@ class NBAStatsService:
                 logger.error(f"nba_api not installed: {ie}")
                 return None
             
-            # Add delay to avoid rate limiting
-            await asyncio.sleep(settings.NBA_API_REQUEST_DELAY)
-            
-            # Fetch career stats - run in thread pool since nba_api is synchronous
-            career_stats = await asyncio.to_thread(
-                playercareerstats.PlayerCareerStats,
-                player_id=nba_person_id,
-                per_mode36="PerGame"
-            )
+            # Fetch career stats with timeout - run in thread pool since nba_api is synchronous
+            # Use 10 second timeout instead of default 30s to fail faster
+            try:
+                career_stats = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        playercareerstats.PlayerCareerStats,
+                        player_id=nba_person_id,
+                        per_mode36="PerGame",
+                        timeout=10  # Set timeout in nba_api request
+                    ),
+                    timeout=12.0  # asyncio timeout wrapper (slightly higher)
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout fetching career stats for player {nba_person_id} (exceeded 12s)")
+                return None
             
             # Extract data frames
             regular_season_df = career_stats.get_data_frames()[0]
