@@ -101,9 +101,20 @@ class RosterRankingService:
         WIN_BONUS = 0.10  # 10% bonus per win
         LOSS_PENALTY = 0.05  # 5% penalty per loss
         
+        # Parallelize roster stats calculation for ALL rosters (another massive speedup)
+        logger.info(f"Calculating stats for {len(rosters)} rosters in parallel...")
+        roster_stats_tasks = [
+            self._calculate_roster_stats(roster, all_players, scoring_settings)
+            for roster in rosters
+        ]
+        all_roster_stats = await asyncio.gather(*roster_stats_tasks, return_exceptions=True)
+        
         rankings = []
-        for roster in rosters:
-            stats = await self._calculate_roster_stats(roster, all_players, scoring_settings)
+        for roster, stats in zip(rosters, all_roster_stats):
+            # Handle exceptions from parallel processing
+            if isinstance(stats, Exception):
+                logger.error(f"Error calculating stats for roster {roster.get('roster_id')}: {stats}")
+                continue
             
             # Get wins/losses from roster settings - ensure they're integers
             settings = roster.get('settings', {})
@@ -168,6 +179,8 @@ class RosterRankingService:
         excluded_players = []
         active_players = 0
         
+        # First pass: collect player info and identify excluded players
+        players_to_fetch = []
         for pid in player_ids:
             player = all_players.get(pid)
             if not player:
@@ -191,12 +204,28 @@ class RosterRankingService:
                 })
                 continue
             
-            # Get player stats using NBA Stats API (same logic as matchup simulation)
-            try:
-                stats = await self._get_player_season_stats(player, player_name)
-            except Exception as e:
-                logger.warning(f"Exception getting stats for {player_name}: {e}")
-                stats = None
+            # Add to fetch list
+            players_to_fetch.append((player, player_name))
+        
+        # Fetch all player stats in parallel (MASSIVE performance improvement)
+        logger.info(f"Fetching stats for {len(players_to_fetch)} players in parallel...")
+        stats_tasks = [
+            self._get_player_season_stats(player, player_name)
+            for player, player_name in players_to_fetch
+        ]
+        stats_results = await asyncio.gather(*stats_tasks, return_exceptions=True)
+        
+        # Process results
+        for (player, player_name), stats in zip(players_to_fetch, stats_results):
+            # Handle exceptions from parallel fetch
+            if isinstance(stats, Exception):
+                logger.warning(f"Exception getting stats for {player_name}: {stats}")
+                excluded_players.append({
+                    'name': player_name,
+                    'status': player.get('injury_status', 'active'),
+                    'reason': 'Stats fetch failed'
+                })
+                continue
                 
             if not stats:
                 logger.debug(f"No stats returned for player: {player_name}")
